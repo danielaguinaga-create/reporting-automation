@@ -1,0 +1,19 @@
+id: runa_colaboradores_chats_mensual
+name: Runa Colaboradores - ChatsByUser
+kind: custom
+client_id: runa
+sql_file: runa_colaboradores_chats_mensual.sql
+output_formats: [csv, xlsx]
+default_recipients: []
+params_schema:
+  billing_month_date: DATE
+params_defaults:
+  billing_month_date: previous_month_first_day
+filename_date_param: billing_month_date
+description: >
+  Chats por usuario (colaboradores Runa) del mes de facturacion. Migrado de
+  'Runa (Colaboradores) - ChatsByUser LM' en el notebook original, donde
+  {billing_month_date} se interpolaba con str.format(). Aqui se pasa como
+  parametro nativo de BigQuery (@billing_month_date) para eliminar la
+  superficie de inyeccion. Si no se pasa por CLI, se resuelve al primer dia
+  del mes anterior a la fecha de ejecucion.

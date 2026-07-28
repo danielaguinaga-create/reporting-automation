@@ -1,0 +1,4 @@
+id: iati_seguros
+display_name: IATI Seguros
+bq_params:
+  id_company: 4e5516cc7ab54ed8

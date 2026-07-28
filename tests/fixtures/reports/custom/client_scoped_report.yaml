@@ -1,0 +1,10 @@
+id: client_scoped_report
+name: ClientScopedReport
+kind: shared
+sql_file: client_scoped_report.sql
+output_formats: [csv]
+default_recipients: []
+params_schema:
+  id_company: STRING
+params_defaults: {}
+description: "Fixture para probar la inyeccion automatica de bq_params del cliente."

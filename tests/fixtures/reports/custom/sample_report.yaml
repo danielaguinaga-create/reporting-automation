@@ -1,0 +1,13 @@
+id: sample_report
+name: SampleReport
+kind: custom
+client_id: acme
+sql_file: sample_report.sql
+output_formats: [csv, xlsx]
+default_recipients: []
+params_schema:
+  billing_month_date: DATE
+params_defaults:
+  billing_month_date: previous_month_first_day
+filename_date_param: billing_month_date
+description: "Fixture de test, no apunta a BigQuery real."

@@ -1,0 +1,61 @@
+# Manifiesto de la corrida mensual: que reporte se genera para que cliente.
+# Corrido con `reporting-automation run-batch --manifest config/monthly_batch.yaml`.
+# Preview local de lo que en Fase 3 dispararia Cloud Scheduler -> Pub/Sub por
+# cada linea (ver README, seccion Roadmap).
+
+- report: protec_usuarios_activos
+  client: protec
+- report: protec_instalaciones_resumen
+  client: protec
+- report: protec_registrados
+  client: protec
+
+- report: runa_colaboradores_chats_mensual
+  client: runa
+- report: runa_grupo_inversa_chats_mensual
+  client: runa
+
+- report: ve_por_mas_polizas_especialidades_historico
+  client: ve_por_mas
+- report: ve_por_mas_polizas_especialidades_mensual
+  client: ve_por_mas
+- report: ve_por_mas_registros_historicos_sin_agprom
+  client: ve_por_mas
+- report: registros_activos_estado
+  client: ve_por_mas
+- report: usuarios_activos_contacto
+  client: ve_por_mas
+
+- report: pepsico_derivaciones
+  client: pepsico
+- report: pepsico_registros_medicos
+  client: pepsico
+
+- report: tudoc_informes_medicos
+  client: tudoc
+
+- report: metricas_alltime
+  client: asefi
+
+- report: chats_por_grupo_acumulado
+  client: bloss_med
+
+- report: usuarios_detalle
+  client: avanza_seguros
+- report: usuarios_detalle
+  client: cobee
+
+- report: chats_detalle
+  client: avanza_seguros
+- report: chats_detalle
+  client: cobee
+
+- report: videollamadas_finalizadas_detalle
+  client: avanza_seguros
+- report: videollamadas_finalizadas_detalle
+  client: cobee
+
+- report: instalaciones_detalle
+  client: cobee
+- report: nps_responses
+  client: cobee

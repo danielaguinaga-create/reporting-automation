@@ -1,0 +1,46 @@
+[project]
+name = "reporting-automation"
+version = "0.1.0"
+description = "Motor de generacion de reportes (Fase 1: registro declarativo + BigQuery + renderers locales; Fase 3: disparo por Pub/Sub via Cloud Run Service)"
+requires-python = ">=3.12"
+dependencies = [
+    "pydantic>=2.6",
+    "pyyaml>=6.0",
+    "pandas>=2.2",
+    "google-cloud-bigquery>=3.25",
+    "db-dtypes>=1.2",
+    "openpyxl>=3.1",
+    "typer>=0.12",
+    "flask>=3.0",
+    "gunicorn>=22.0",
+    "google-cloud-storage>=2.18",
+    "google-cloud-logging>=3.11",
+    "google-cloud-secret-manager>=2.20",
+    "google-api-python-client>=2.140",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-mock>=3.14",
+    "ruff>=0.6",
+]
+
+[project.scripts]
+reporting-automation = "reporting_automation.cli:app"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 110
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]

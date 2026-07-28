@@ -1,0 +1,12 @@
+id: tudoc_informes_medicos
+name: InformesMedicos
+kind: custom
+client_id: tudoc
+sql_file: tudoc_informes_medicos.sql
+output_formats:
+- csv
+default_recipients: []
+params_schema: {}
+params_defaults: {}
+filename_pattern: '{year}{month}_MD_{report_name}'
+description: Informes medicos del segmento TuDoc_Innocean dentro de Meeting-doctors

@@ -1,0 +1,31 @@
+SELECT
+    idUserMD                AS UserID,
+    UserHash,
+    UserToken,
+    idCompany                AS ApiKey,
+    UserFirstName,
+    UserLastName,
+    UserEmail,
+    UserAge,
+    UserPhoneNumber,
+    UserGenderNum,
+    UserContractNumber,
+    UserNidNumber,
+    UserCoverageName,
+    UserCustomerGroup,
+    UserCompanyGroupCode,
+    UserType,
+    UserStatus,
+    UserBanned,
+    UserBannedAtUTC,
+    UserInvitationCode,
+    UserFirstAccessedAtUTC,
+    UserSubscribedAtUTC,
+    UserUnsubscribedAtUTC,
+    UserAdditionalData,
+    UserUninstalledAtUTC,
+    UserDateAtUTC,
+    UserUpdatedAtUTC
+FROM `data-prd-424213.03_BaseModel.DimUsers`
+WHERE idCompany = @id_company
+ORDER BY UserSubscribedAtUTC ASC;

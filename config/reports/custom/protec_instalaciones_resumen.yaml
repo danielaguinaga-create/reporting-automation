@@ -1,0 +1,12 @@
+id: protec_instalaciones_resumen
+name: InstalacionesResumen
+kind: custom
+client_id: protec
+sql_file: protec_instalaciones_resumen.sql
+output_formats:
+- xlsx
+default_recipients: []
+params_schema: {}
+params_defaults: {}
+filename_pattern: '{year}{month}_MD_{report_name}'
+description: Conteo de instalaciones por usuario para Protec

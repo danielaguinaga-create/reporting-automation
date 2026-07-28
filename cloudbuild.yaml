@@ -1,0 +1,61 @@
+# CI/CD (Fase 4) -- lint -> test -> build -> push -> deploy.
+#
+# Este archivo es codigo/config, seguro de tener en el repo. Lo que NO se
+# hizo (a proposito, ver README seccion Roadmap/Fase 4): crear el trigger de
+# Cloud Build real, que requiere un repo git con un remoto conectado
+# (GitHub/GitLab/Cloud Source Repos) -- este proyecto ni siquiera es un repo
+# git todavia. Sin eso, un trigger no tiene de donde disparar.
+#
+# Uso manual mientras no haya trigger (build+deploy a mano, revisando cada
+# paso primero):
+#   gcloud builds submit --config=cloudbuild.yaml --project=data-prd-424213
+
+steps:
+  - id: lint
+    name: "python:3.13-slim"
+    entrypoint: bash
+    args:
+      - -c
+      - pip install --no-cache-dir -e ".[dev]" -q && ruff check src tests
+
+  - id: test
+    name: "python:3.13-slim"
+    entrypoint: bash
+    args:
+      - -c
+      - pip install --no-cache-dir -e ".[dev]" -q && pytest tests/unit -v
+
+  - id: build
+    name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - -t
+      - "${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/reporting-automation:$SHORT_SHA"
+      - .
+    waitFor: ["lint", "test"]
+
+  - id: push
+    name: gcr.io/cloud-builders/docker
+    args:
+      - push
+      - "${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/reporting-automation:$SHORT_SHA"
+    waitFor: ["build"]
+
+  - id: deploy
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    entrypoint: gcloud
+    args:
+      - run
+      - deploy
+      - reporting-automation
+      - --image=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/reporting-automation:$SHORT_SHA
+      - --region=${_REGION}
+      - --no-allow-unauthenticated
+    waitFor: ["push"]
+
+substitutions:
+  _REGION: europe-southwest1
+  _REPOSITORY: reporting-automation
+
+options:
+  logging: CLOUD_LOGGING_ONLY

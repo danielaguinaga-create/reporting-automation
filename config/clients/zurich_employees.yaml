@@ -1,0 +1,4 @@
+id: zurich_employees
+display_name: Zurich-employees
+bq_params:
+  id_company: Td4raycWuzJETrg8

@@ -1,0 +1,18 @@
+# Configuracion no-sensible del proyecto. Nada de secretos aqui (ver README,
+# seccion "Secrets", para la convencion de Secret Manager de Fase 2).
+
+gcp_project: data-prd-424213
+bigquery_dataset: 03_BaseModel
+
+reports_dir: config/reports
+clients_dir: config/clients
+
+# Bucket propuesto para Fase 3 (aterrizaje de reportes generados via Cloud
+# Run Service). Nombre PROPUESTO, sin confirmar -- no existe todavia, ver
+# README seccion Roadmap/Fase 3.
+trace_bucket: reporting-automation-trace
+
+# Carpeta raiz de Drive para delivery (Fase 2). No configurada todavia --
+# sin esto, GDriveDelivery falla con un mensaje claro en vez de intentar
+# subir a ningun lado. Ver README seccion Roadmap/Fase 2.
+gdrive_root_folder_id: null

@@ -1,0 +1,10 @@
+id: simple_report
+name: SimpleReport
+kind: custom
+client_id: acme
+sql_file: simple_report.sql
+output_formats: [csv]
+default_recipients: []
+params_schema: {}
+params_defaults: {}
+description: "Fixture sin parametros."
