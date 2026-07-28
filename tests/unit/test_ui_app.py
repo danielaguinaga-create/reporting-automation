@@ -48,6 +48,21 @@ def test_running_a_report_shows_success_and_download_button(monkeypatch):
     assert len(at.download_button) >= 1
 
 
+def test_shared_report_with_known_client_does_not_ask_for_client_resolved_params():
+    """Si el cliente elegido ya trae id_company en su ClientConfig, la UI no
+    debe pedirlo como texto -- eso confundia (parecia 'requerido')."""
+    at = AppTest.from_file(APP_PATH)
+    at.run()
+    assert not at.exception
+
+    at.selectbox[0].select("chats_detalle").run()
+    at.selectbox[1].select("protec").run()
+
+    assert not at.exception
+    assert not any(ti.label.startswith("id_company") for ti in at.text_input)
+    assert any("Resuelto autom" in c.value for c in at.caption)
+
+
 def test_running_a_report_with_orchestrator_failure_shows_error(monkeypatch):
     class BoomBigQueryClient:
         def __init__(self, project: str | None = None):

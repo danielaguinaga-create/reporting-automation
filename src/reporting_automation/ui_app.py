@@ -53,11 +53,22 @@ else:
         st.stop()
     client_id = st.selectbox("Cliente", known_clients)
 
+client_config = client_registry.get_or_none(client_id)
+client_params = client_config.bq_params if client_config else {}
+
 params: dict[str, str] = {}
-if report.params_schema:
+params_needing_input = {
+    name: bq_type for name, bq_type in report.params_schema.items() if name not in client_params
+}
+
+if client_params:
+    resolved_preview = ", ".join(f"{k}={v}" for k, v in client_params.items())
+    st.caption(f"Resuelto automáticamente desde el cliente: {resolved_preview}")
+
+if params_needing_input:
     st.subheader("Parámetros")
     st.caption("Déjalos vacíos para usar el valor por defecto del reporte (si tiene uno).")
-    for name, bq_type in report.params_schema.items():
+    for name, bq_type in params_needing_input.items():
         default_hint = report.params_defaults.get(name, "")
         value = st.text_input(
             f"{name} ({bq_type})",
