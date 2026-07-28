@@ -17,8 +17,11 @@ y probado con mocks (y contra BigQuery real donde aplica), pero **no existen
 todavía el secret de SMTP, la carpeta de Drive, el bucket, ni el tema de
 Pub/Sub** — son pasos explícitos pendientes, ver
 [Roadmap](#roadmap-fases-2-4). FTP no está implementado (sin un cliente real
-para probarlo). UI y API (capas superiores del diagrama) son next steps
-deseables del equipo, fuera de alcance de este repo por ahora.
+para probarlo). La **UI** (Streamlit) también tiene código listo y probado
+(ver sección UI), pero su despliegue real a Cloud Run + IAP está bloqueado
+por permisos de GCP que la cuenta usada en esta sesión no tiene — queda
+documentado para que un admin del proyecto lo despliegue. API (capa del
+diagrama) sigue fuera de alcance.
 
 ## Requisitos
 
@@ -417,3 +420,104 @@ correr el pipeline a mano.
     manual).
 13. Contenido/formato exacto de la salida `txt` — ninguno de los reportes
     actuales lo usa, no hay precedente que replicar.
+
+## UI (Streamlit) — código listo y probado, pendiente de que un admin la despliegue
+
+Capa de UI del diagrama, alcance v1: elegir reporte + cliente (+ parámetros)
+desde un formulario web, correrlo contra BigQuery real, y descargar el
+archivo. **No** dispara delivery (correo/GDrive) desde la UI — eso sigue
+siendo solo CLI (`run --deliver`), para que una herramienta usada por varias
+personas no pueda mandarle algo real a un cliente por accidente.
+
+- `src/reporting_automation/ui_app.py`: un solo script de Streamlit, reusa
+  `ReportRegistry`, `ClientRegistry`, `orchestrator.run_report`,
+  `BigQueryExecutor` tal cual — ninguna lógica nueva, la UI es una capa de
+  presentación sobre lo que ya existe.
+- `Dockerfile.ui`: imagen para un Cloud Run Service separado del de Fase 3
+  (`reporting-automation-ui` vs `reporting-automation`).
+- Probado: `tests/unit/test_ui_app.py` (con `streamlit.testing.v1.AppTest`,
+  BigQuery mockeado) y en vivo contra BigQuery real (20 reportes listados,
+  corrida real de `chats_detalle`, 24 filas, botón de descarga generado).
+
+### Correrla localmente
+
+```bash
+./run_ui_local.sh   # o: streamlit run src/reporting_automation/ui_app.py
+```
+Abre `http://localhost:8501`. Usa tus credenciales ADC ya configuradas
+(`gcloud auth application-default login`), igual que `run`/`run-batch`.
+
+### Por qué el despliegue real no se hizo en esta sesión
+
+Intenté los primeros pasos reales (listar Artifact Registry, leer el IAM del
+proyecto, listar servicios de Cloud Run) y los tres fallaron por permisos:
+la cuenta usada (`daniel.aguinaga@meetingdoctors.com`) tiene acceso a
+BigQuery pero **ningún permiso de Cloud Run / Artifact Registry / IAM** en
+`data-prd-424213`. No es algo que se pueda resolver desde el código — hace
+falta que alguien con rol de administrador en el proyecto otorgue esos
+permisos, o corra el despliegue directamente. Número de proyecto (obtenido
+sin permisos especiales): `901461160778`.
+
+### Guía de despliegue para quien tenga permisos de admin
+
+Roles necesarios en `data-prd-424213`: `roles/run.admin`,
+`roles/artifactregistry.admin`, `roles/iam.serviceAccountUser`, y para IAP
+`roles/iap.admin` + `roles/iap.settingsAdmin` + `roles/oauthconfig.editor`.
+
+```bash
+# 0. Si es la primera vez que se usa Artifact Registry en el proyecto:
+gcloud artifacts repositories create reporting-automation \
+    --repository-format=docker --location=europe-southwest1 \
+    --project=data-prd-424213
+
+# 1. Build + push de la imagen de la UI (usa Dockerfile.ui, no el Dockerfile de Fase 3)
+gcloud builds submit --project=data-prd-424213 \
+    --config=cloudbuild.ui.yaml .
+# (cloudbuild.ui.yaml hace: docker build -f Dockerfile.ui -t <imagen> . && push)
+
+# 2. Deploy del Cloud Run Service
+gcloud run deploy reporting-automation-ui \
+    --image=europe-southwest1-docker.pkg.dev/data-prd-424213/reporting-automation/ui:latest \
+    --region=europe-southwest1 --no-allow-unauthenticated --project=data-prd-424213
+
+# 3. La cuenta de servicio con la que corre el servicio (por defecto, la de
+#    Compute Engine del proyecto) necesita permisos de BigQuery -- sin esto
+#    la UI se despliega pero "Ejecutar reporte" falla para todo el equipo:
+gcloud projects add-iam-policy-binding data-prd-424213 \
+    --member=serviceAccount:901461160778-compute@developer.gserviceaccount.com \
+    --role=roles/bigquery.dataViewer
+gcloud projects add-iam-policy-binding data-prd-424213 \
+    --member=serviceAccount:901461160778-compute@developer.gserviceaccount.com \
+    --role=roles/bigquery.jobUser
+
+# 4. Habilitar IAP sobre el servicio
+gcloud run services update reporting-automation-ui \
+    --region=europe-southwest1 --iap --project=data-prd-424213
+
+# 5. Dar al agente de servicio de IAP permiso para invocar el Cloud Run Service
+gcloud run services add-iam-policy-binding reporting-automation-ui \
+    --region=europe-southwest1 \
+    --member=serviceAccount:service-901461160778@gcp-sa-iap.iam.gserviceaccount.com \
+    --role=roles/run.invoker --project=data-prd-424213
+
+# 6. Dar acceso a todo el dominio @meetingdoctors.com (intentar primero;
+#    la sintaxis exacta de restriccion por dominio en IAP no la pude
+#    confirmar en la documentacion -- si este comando falla, usar el
+#    siguiente, repetido por cada persona del equipo):
+gcloud iap web add-iam-policy-binding \
+    --member=domain:meetingdoctors.com --role=roles/iap.httpsResourceAccessor \
+    --region=europe-southwest1 --resource-type=cloud-run \
+    --service=reporting-automation-ui --project=data-prd-424213
+
+# Alternativa por usuario, si el comando de dominio falla:
+gcloud iap web add-iam-policy-binding \
+    --member=user:persona@meetingdoctors.com --role=roles/iap.httpsResourceAccessor \
+    --region=europe-southwest1 --resource-type=cloud-run \
+    --service=reporting-automation-ui --project=data-prd-424213
+```
+
+**Nota:** si es la primera vez que se usa IAP en este proyecto, GCP pedirá
+configurar la pantalla de consentimiento OAuth (tipo "Internal" si el
+proyecto pertenece a la organización de Google Workspace de
+meetingdoctors.com — así el login queda restringido al dominio
+automáticamente; "External" si no).

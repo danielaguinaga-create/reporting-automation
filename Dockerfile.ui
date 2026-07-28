@@ -1,0 +1,17 @@
+# Imagen del Cloud Run Service de la UI (Streamlit). Servicio separado del
+# de Fase 3 (main_entrypoint) -- ver Dockerfile para ese.
+FROM python:3.13-slim
+
+WORKDIR /app
+
+COPY pyproject.toml ./
+COPY src ./src
+COPY config ./config
+
+RUN pip install --no-cache-dir .
+
+ENV PORT=8080
+EXPOSE 8080
+
+CMD streamlit run src/reporting_automation/ui_app.py \
+    --server.port=$PORT --server.address=0.0.0.0 --server.headless=true

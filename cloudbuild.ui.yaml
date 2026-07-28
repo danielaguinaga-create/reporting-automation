@@ -1,0 +1,27 @@
+# Build + push de la imagen de la UI (Streamlit). Usa Dockerfile.ui, no el
+# Dockerfile de Fase 3 -- por eso es un config separado de cloudbuild.yaml
+# (gcloud run deploy --source solo detecta un archivo llamado "Dockerfile").
+#
+# Uso (requiere permisos de admin en el proyecto, ver README seccion UI):
+#   gcloud builds submit --config=cloudbuild.ui.yaml --project=data-prd-424213 .
+
+steps:
+  - id: build
+    name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - -f
+      - Dockerfile.ui
+      - -t
+      - "${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/ui:latest"
+      - .
+
+images:
+  - "${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/ui:latest"
+
+substitutions:
+  _REGION: europe-southwest1
+  _REPOSITORY: reporting-automation
+
+options:
+  logging: CLOUD_LOGGING_ONLY
