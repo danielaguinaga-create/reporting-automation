@@ -362,10 +362,24 @@ gcloud eventarc triggers create reporting-automation-trigger \
 python -m reporting_automation generate-scheduler-jobs   # imprime los comandos, no los corre
 ```
 
-### Fase 4 — CI/CD (no construida)
+### Fase 4 — CI/CD (config lista, sin trigger real)
 
-`cloudbuild.yaml` (lint → test → build → deploy), repo
-`data-services/reporting-automation`.
+Lo que ya existe:
+
+- `cloudbuild.yaml`: `lint` (ruff) → `test` (pytest) → `build` (imagen
+  Docker) → `push` (Artifact Registry) → `deploy` (Cloud Run Service). Se
+  puede correr a mano desde ya: `gcloud builds submit --config=cloudbuild.yaml`.
+- El proyecto ya es un repo git local (`git init` + primer commit hecho).
+- `ruff` configurado como linter (`pyproject.toml`, reglas `E`/`F`/`I`,
+  `line-length=110`) — `ruff check src tests` corre limpio.
+
+Lo que falta (requiere una decisión de dónde vive el repo, no inventada
+aquí): conectar un **remoto** (GitHub, GitLab, o Cloud Source Repos) —
+`git remote add origin <url> && git push -u origin main` — y crear el
+trigger de Cloud Build apuntando a ese remoto
+(`gcloud builds triggers create github/gitlab/...`). Sin remoto, un trigger
+no tiene de dónde disparar; mientras tanto, `cloudbuild.yaml` sirve para
+correr el pipeline a mano.
 
 ### TODOs abiertos (decisiones pendientes de la empresa, no inventadas aquí)
 
