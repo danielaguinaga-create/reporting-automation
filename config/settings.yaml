@@ -16,3 +16,10 @@ trace_bucket: reporting-automation-trace
 # sin esto, GDriveDelivery falla con un mensaje claro en vez de intentar
 # subir a ningun lado. Ver README seccion Roadmap/Fase 2.
 gdrive_root_folder_id: null
+
+# Carpeta raiz de Drive para el comando `ask` (preguntas libres, ver README
+# seccion "Preguntas en lenguaje natural"). Deliberadamente separada de
+# gdrive_root_folder_id para no mezclar exports ad-hoc con entregas de
+# reportes de cliente. No configurada todavia -- mismo comportamiento que
+# gdrive_root_folder_id (falla con mensaje claro si falta).
+adhoc_gdrive_folder_id: null

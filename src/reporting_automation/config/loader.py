@@ -13,6 +13,7 @@ class Settings(BaseModel):
     clients_dir: str = "config/clients"
     trace_bucket: str = "reporting-automation-trace"
     gdrive_root_folder_id: str | None = None
+    adhoc_gdrive_folder_id: str | None = None
 
 
 def load_settings(path: str | Path = "config/settings.yaml") -> Settings:

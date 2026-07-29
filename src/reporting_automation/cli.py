@@ -10,6 +10,8 @@ from google.cloud import bigquery, secretmanager
 from googleapiclient.discovery import build as build_drive_service
 from pydantic import ValidationError
 
+from reporting_automation.ask import AskCancelled, upload_ask_files_to_drive
+from reporting_automation.ask import ask as ask_question
 from reporting_automation.batch import load_batch_manifest, run_batch
 from reporting_automation.config.client_import import import_clients_from_csv
 from reporting_automation.config.client_registry import ClientRegistry
@@ -28,6 +30,13 @@ from reporting_automation.delivery.dispatch import dispatch_delivery, resolve_re
 from reporting_automation.delivery.email_delivery import EmailDelivery
 from reporting_automation.delivery.gdrive_delivery import GDriveDelivery
 from reporting_automation.exceptions import ClientConfigError, ReportConfigError
+from reporting_automation.llm.anthropic_client import (
+    DEFAULT_MODEL,
+    AnthropicChatModel,
+    resolve_anthropic_api_key,
+)
+from reporting_automation.llm.sql_generator import GeneratedSql, SqlGenerationError
+from reporting_automation.llm.sql_safety import UnsafeSqlError
 from reporting_automation.orchestrator import run_report
 from reporting_automation.query.bigquery_client import BigQueryExecutor
 from reporting_automation.secrets.secret_manager import SecretManagerClient
@@ -419,6 +428,115 @@ def run_batch_cmd(
 
     if fail:
         raise typer.Exit(code=1)
+
+
+@app.command("ask")
+def ask_cmd(
+    question: str = typer.Argument(..., help="Pregunta en lenguaje natural sobre los datos"),
+    formats: str = typer.Option(
+        "csv", "--formats", help="Lista separada por comas: csv,xlsx,pdf"
+    ),
+    output_dir: str = typer.Option("./out/preguntas", "--output-dir"),
+    deliver_drive: bool = typer.Option(
+        False,
+        "--deliver-drive",
+        help="Ademas de generar los archivos localmente, subirlos a Drive "
+        "(carpeta settings.adhoc_gdrive_folder_id / preguntas_libres / <year><mes>/).",
+    ),
+    yes: bool = typer.Option(
+        False,
+        "--yes",
+        "-y",
+        help="No pedir confirmacion antes de ejecutar el SQL generado contra BigQuery "
+        "(igual se bloquea cualquier cosa que no sea SELECT/WITH).",
+    ),
+    refresh_schema: bool = typer.Option(
+        False,
+        "--refresh-schema",
+        help="Ignora el cache local del esquema del dataset y lo vuelve a leer de BigQuery.",
+    ),
+    model: str = typer.Option(DEFAULT_MODEL, "--model", help="Modelo de Anthropic a usar"),
+    settings_path: str = typer.Option("config/settings.yaml", "--settings"),
+) -> None:
+    """Traduce una pregunta en espanol a SQL, la corre contra BigQuery (dataset de
+    `settings.bigquery_dataset`) y responde en lenguaje natural.
+
+    Requiere `ANTHROPIC_API_KEY` (o el secreto `anthropic-api-key` en Secret Manager)
+    y credenciales de BigQuery/Drive validas (`gcloud auth application-default login`).
+
+    Seguridad: el SQL generado se valida dos veces antes de tocar datos -- primero
+    por regex (debe empezar con SELECT/WITH, sin DDL/DML, una sola sentencia), y
+    despues por el `statement_type` que BigQuery mismo devuelve en un dry run.
+    Por defecto, ademas, pide confirmar el SQL (con el costo estimado en bytes)
+    antes de ejecutarlo de verdad -- usa `--yes` para saltarte esa confirmacion
+    en scripts/automatizacion.
+    """
+    try:
+        output_formats = [OutputFormat(f.strip()) for f in formats.split(",") if f.strip()]
+    except ValueError as exc:
+        raise typer.BadParameter(f"--formats invalido: {exc}. Validos: csv, xlsx, pdf") from exc
+    if OutputFormat.GSHEETS in output_formats or OutputFormat.TXT in output_formats:
+        raise typer.BadParameter("--formats solo soporta csv, xlsx, pdf en 'ask'.")
+
+    settings = load_settings(settings_path)
+
+    bq_client = bigquery.Client(project=settings.gcp_project)
+    secret_manager = SecretManagerClient(secretmanager.SecretManagerServiceClient(), settings.gcp_project)
+
+    try:
+        api_key = resolve_anthropic_api_key(secret_manager)
+    except RuntimeError as exc:
+        typer.echo(f"ERROR: {exc}", err=True)
+        raise typer.Exit(code=1) from None
+
+    chat_model = AnthropicChatModel(api_key=api_key, model=model)
+
+    def _confirm(generated: GeneratedSql, num_bytes: int) -> bool:
+        typer.echo("\nSQL generado:")
+        typer.echo(generated.sql)
+        typer.echo(f"\nExplicacion: {generated.explanation}")
+        typer.echo(f"\nBytes estimados a procesar: {num_bytes:,}")
+        if yes:
+            return True
+        return typer.confirm("\nEjecutar esta consulta contra BigQuery?")
+
+    try:
+        result = ask_question(
+            question,
+            bq_client=bq_client,
+            schema_runner=bq_client,
+            chat_model=chat_model,
+            project=settings.gcp_project,
+            dataset=settings.bigquery_dataset,
+            output_dir=Path(output_dir),
+            formats=output_formats,
+            schema_cache_path=Path(".cache") / f"schema_{settings.bigquery_dataset}.json",
+            confirm=_confirm,
+            force_refresh_schema=refresh_schema,
+        )
+    except AskCancelled:
+        typer.echo("Cancelado -- no se ejecuto ninguna consulta.")
+        raise typer.Exit(code=1) from None
+    except UnsafeSqlError as exc:
+        typer.echo(f"ERROR de seguridad: {exc}", err=True)
+        raise typer.Exit(code=1) from None
+    except SqlGenerationError as exc:
+        typer.echo(f"ERROR generando SQL: {exc}", err=True)
+        raise typer.Exit(code=1) from None
+
+    typer.echo(f"\n{result.df.shape[0]} filas x {result.df.shape[1]} columnas")
+    typer.echo(f"\nRespuesta: {result.answer}\n")
+    for rendered in result.rendered_files:
+        typer.echo(f"  - {rendered.format.value}: {rendered.local_path}")
+
+    if deliver_drive:
+        credentials, _ = google.auth.default()
+        drive_service = build_drive_service("drive", "v3", credentials=credentials)
+        drive_delivery = GDriveDelivery(drive_service, settings.adhoc_gdrive_folder_id)
+        delivery_result = upload_ask_files_to_drive(drive_delivery, result.rendered_files, question)
+        _echo_delivery_results([delivery_result])
+        if delivery_result.status == "failed":
+            raise typer.Exit(code=1)
 
 
 @app.command("generate-scheduler-jobs")

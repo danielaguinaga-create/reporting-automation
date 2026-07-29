@@ -8,10 +8,10 @@ from pydantic import BaseModel, Field
 class OutputFormat(str, Enum):
     """Formatos de salida soportados por el diagrama de arquitectura.
 
-    Solo CSV, XLSX y TXT tienen renderer implementado en Fase 1. PDF y
-    GSHEETS quedan declarados para que la config los pueda referenciar sin
-    romper, pero ``rendering.factory.get_renderer`` levanta ``NotImplementedError``
-    para ellos hasta Fase 2 (ver README, roadmap).
+    CSV, XLSX, TXT y PDF tienen renderer implementado. GSHEETS queda
+    declarado para que la config lo pueda referenciar sin romper, pero
+    ``rendering.factory.get_renderer`` levanta ``NotImplementedError``
+    para el hasta que haya un caso de uso real (ver README, roadmap).
     """
 
     CSV = "csv"

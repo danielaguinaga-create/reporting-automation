@@ -7,6 +7,7 @@ from reporting_automation.config.models import OutputFormat, ReportConfig, Repor
 from reporting_automation.rendering.base import RenderContext, resolve_base_filename
 from reporting_automation.rendering.csv_renderer import CsvRenderer
 from reporting_automation.rendering.factory import get_renderer
+from reporting_automation.rendering.pdf_renderer import PdfRenderer
 from reporting_automation.rendering.txt_renderer import TxtRenderer
 from reporting_automation.rendering.xlsx_renderer import XlsxRenderer
 
@@ -75,12 +76,23 @@ def test_factory_returns_implemented_renderers():
     assert isinstance(get_renderer(OutputFormat.CSV), CsvRenderer)
     assert isinstance(get_renderer(OutputFormat.XLSX), XlsxRenderer)
     assert isinstance(get_renderer(OutputFormat.TXT), TxtRenderer)
+    assert isinstance(get_renderer(OutputFormat.PDF), PdfRenderer)
 
 
-@pytest.mark.parametrize("fmt", [OutputFormat.PDF, OutputFormat.GSHEETS])
+@pytest.mark.parametrize("fmt", [OutputFormat.GSHEETS])
 def test_factory_raises_not_implemented_for_pending_formats(fmt):
     with pytest.raises(NotImplementedError):
         get_renderer(fmt)
+
+
+def test_pdf_renderer_writes_a_valid_pdf(tmp_path):
+    ctx = RenderContext(base_filename="out", output_dir=tmp_path)
+    rendered = PdfRenderer().render(SAMPLE_DF, _report(), ctx)
+
+    assert rendered.local_path == tmp_path / "out.pdf"
+    raw = rendered.local_path.read_bytes()
+    assert raw.startswith(b"%PDF-")
+    assert rendered.local_path.stat().st_size > 0
 
 
 def test_resolve_base_filename_uses_run_date_by_default():

@@ -18,6 +18,8 @@ dependencies = [
     "google-cloud-secret-manager>=2.20",
     "google-api-python-client>=2.140",
     "streamlit>=1.38",
+    "anthropic>=0.40",
+    "reportlab>=4.2",
 ]
 
 [project.optional-dependencies]

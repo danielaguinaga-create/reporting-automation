@@ -10,8 +10,12 @@ reportes (YAML + SQL), siguiendo el diagrama de arquitectura interno
 sin desplegar recursos reales de GCP todavía.** Fase 1 implementa el "Def
 Main" del diagrama de forma local y testeable: registro de reportes (20
 reportes reales registrados, 183 clientes importados), ejecución contra
-BigQuery, renderizado a CSV/XLSX/TXT, `run-batch` para la corrida mensual
-completa, y una CLI. Fase 2 (delivery por correo + GDrive) y Fase 3 (disparo
+BigQuery, renderizado a CSV/XLSX/TXT/PDF, `run-batch` para la corrida mensual
+completa, y una CLI. Además de los reportes registrados, el comando `ask`
+(ver sección [Preguntas en lenguaje natural](#preguntas-en-lenguaje-natural-ask))
+traduce preguntas libres en español a SQL vía Claude, con validación de
+solo-lectura, y exporta a CSV/XLSX/PDF o Drive. Fase 2 (delivery por correo
++ GDrive) y Fase 3 (disparo
 por Cloud Scheduler → Pub/Sub → Cloud Run Service) tienen el código escrito
 y probado con mocks (y contra BigQuery real donde aplica), pero **no existen
 todavía el secret de SMTP, la carpeta de Drive, el bucket, ni el tema de
@@ -29,6 +33,10 @@ diagrama) sigue fuera de alcance.
 - Para ejecutar reportes contra BigQuery real: credenciales válidas (`gcloud
   auth application-default login`) con acceso de lectura al proyecto
   `data-prd-424213`, dataset `03_BaseModel`.
+- Para el comando `ask` (ver [Preguntas en lenguaje
+  natural](#preguntas-en-lenguaje-natural-ask)): además, una API key de
+  Anthropic en `ANTHROPIC_API_KEY` (o el secreto `anthropic-api-key` en
+  Secret Manager).
 
 ## Instalación (desarrollo local)
 
@@ -102,6 +110,61 @@ Para agregar un reporte nuevo a la corrida mensual, agrega su línea a
 
 Requiere credenciales de BigQuery reales (ver Requisitos) — no está cubierto
 por los tests unitarios.
+
+## Preguntas en lenguaje natural (`ask`)
+
+Para preguntas puntuales que no justifican registrar un reporte nuevo:
+traduce una pregunta en español al SQL de BigQuery necesario, lo corre contra
+el dataset configurado (`settings.bigquery_dataset`), y responde en lenguaje
+natural. Exporta a CSV/XLSX/PDF y puede subir el resultado a Drive.
+
+```bash
+python -m reporting_automation ask "¿Cuántos usuarios activos tuvo Protec el mes pasado?"
+
+python -m reporting_automation ask "Top 10 clientes por número de videollamadas en 2026" \
+    --formats csv,xlsx,pdf --deliver-drive
+
+# Para scripts/automatización, sin el prompt de confirmación interactivo:
+python -m reporting_automation ask "cuantos chats hubo ayer" --yes
+```
+
+**Requiere** `ANTHROPIC_API_KEY` en el entorno (o el secreto `anthropic-api-key`
+en Secret Manager, misma convención que `internal-smtp` — ver sección
+Roadmap/Fase 2) y credenciales de BigQuery/Drive válidas (`gcloud auth
+application-default login`). No cubierto por los tests unitarios (que usan
+fakes para el LLM y BigQuery) — probarlo de verdad requiere ambas
+credenciales.
+
+**Cómo funciona:**
+
+1. Lee el esquema del dataset (`INFORMATION_SCHEMA.COLUMNS`) y lo cachea
+   localmente 24h (`.cache/schema_<dataset>.json`; `--refresh-schema` para
+   forzar releerlo si el esquema cambió).
+2. Le pasa la pregunta + esquema a Claude, que devuelve una única consulta
+   SQL y una explicación.
+3. **Seguridad — el SQL generado se valida dos veces antes de tocar datos:**
+   primero por regex (debe empezar con `SELECT`/`WITH`, sin `INSERT`,
+   `UPDATE`, `DELETE`, `DROP`, `CREATE`, `ALTER`, `MERGE` ni otras sentencias
+   de escritura/DDL, y una sola sentencia — nunca varias separadas por
+   `;`); después, al hacer un *dry run* contra BigQuery para estimar el
+   costo, se verifica el `statement_type` que BigQuery mismo asigna a la
+   query (autoritativo, no depende de que el texto "parezca" un SELECT).
+4. Muestra el SQL generado y los bytes estimados a procesar, y **pide
+   confirmación antes de ejecutar la query de verdad** (`--yes` la salta,
+   pensado para uso en scripts — la validación de solo-lectura sigue
+   aplicando igual).
+5. Ejecuta la query, le pasa el resultado a Claude para que responda la
+   pregunta original en 2-4 frases citando cifras concretas.
+6. Renderiza los formatos pedidos (`--formats csv,xlsx,pdf`, default `csv`)
+   en `--output-dir` (default `./out/preguntas`). El PDF incluye la
+   pregunta, el SQL generado, la respuesta y la tabla de resultados
+   (recortada a las primeras 500 filas — para más, usar CSV o XLSX).
+7. Con `--deliver-drive`, sube los archivos generados a
+   `<settings.adhoc_gdrive_folder_id>/preguntas_libres/<year><mes>/`,
+   reutilizando `GDriveDelivery` (mismo código que `run --deliver`) —
+   requiere configurar `adhoc_gdrive_folder_id` en `config/settings.yaml`
+   (deliberadamente separado de `gdrive_root_folder_id`, para no mezclar
+   estos exports ad-hoc con las entregas de reportes de cliente).
 
 ## Crear un reporte ad-hoc nuevo (lo que pide un cliente)
 
