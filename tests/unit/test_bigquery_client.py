@@ -3,7 +3,7 @@ from datetime import date
 import pandas as pd
 import pytest
 
-from reporting_automation.query.bigquery_client import BigQueryExecutor
+from reporting_automation.query.bigquery_client import BigQueryExecutor, parse_param_declaration
 
 
 class FakeQueryJob:
@@ -68,3 +68,21 @@ def test_run_raises_on_unsupported_type():
 
     with pytest.raises(ValueError, match="no soportado"):
         executor.run(sql="SELECT @x", params={"x": "1"}, params_schema={"x": "GEOGRAPHY"})
+
+
+def test_parse_param_declaration_parses_name_and_uppercases_type():
+    assert parse_param_declaration("billing_month_date:date") == ("billing_month_date", "DATE")
+
+
+def test_parse_param_declaration_strips_whitespace():
+    assert parse_param_declaration("  id_company : STRING  ") == ("id_company", "STRING")
+
+
+def test_parse_param_declaration_raises_without_colon():
+    with pytest.raises(ValueError, match="nombre:TIPO_BQ"):
+        parse_param_declaration("id_company")
+
+
+def test_parse_param_declaration_raises_on_unsupported_type():
+    with pytest.raises(ValueError, match="no soportado"):
+        parse_param_declaration("x:GEOGRAPHY")

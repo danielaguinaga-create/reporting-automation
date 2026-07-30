@@ -38,7 +38,7 @@ from reporting_automation.llm.anthropic_client import (
 from reporting_automation.llm.sql_generator import GeneratedSql, SqlGenerationError
 from reporting_automation.llm.sql_safety import UnsafeSqlError
 from reporting_automation.orchestrator import run_report
-from reporting_automation.query.bigquery_client import BigQueryExecutor
+from reporting_automation.query.bigquery_client import BigQueryExecutor, parse_param_declaration
 from reporting_automation.rendering.template_registry import TemplateNotFoundError, TemplateRegistry
 from reporting_automation.secrets.secret_manager import SecretManagerClient
 from reporting_automation.time_window import WINDOW_PRESETS
@@ -72,12 +72,11 @@ def _parse_params(raw_params: list[str]) -> dict[str, str]:
 def _parse_param_schema(raw: list[str]) -> dict[str, str]:
     schema: dict[str, str] = {}
     for item in raw:
-        if ":" not in item:
-            raise typer.BadParameter(
-                f"--param debe ser nombre:TIPO_BQ (ej. billing_month_date:DATE), recibido: {item!r}"
-            )
-        name, bq_type = item.split(":", 1)
-        schema[name] = bq_type.upper()
+        try:
+            name, bq_type = parse_param_declaration(item)
+        except ValueError as exc:
+            raise typer.BadParameter(str(exc)) from exc
+        schema[name] = bq_type
     return schema
 
 

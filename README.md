@@ -338,6 +338,10 @@ En Docker (`Dockerfile`/`Dockerfile.ui`) ya está resuelto con
 
 ## Reportes reutilizables entre clientes (`shared`) + mapeo de clientes
 
+Todo lo de esta sección (`ClientConfig`/`config/clients/*.yaml`) es CLI y
+`run-batch` — la UI de Streamlit resuelve el cliente directamente desde
+BigQuery (`DimCompanies`), ver sección "UI (Streamlit)" más abajo.
+
 Un reporte `custom` esta atado a un `client_id` fijo en su config (como los
 dos ejemplos de arriba). Cuando el mismo reporte debe poder correr para
 *cualquier* compañía cliente (ej. "videollamadas completadas en el mes"), en
@@ -596,14 +600,48 @@ siendo solo CLI (`run --deliver`), para que una herramienta usada por varias
 personas no pueda mandarle algo real a un cliente por accidente.
 
 - `src/reporting_automation/ui_app.py`: un solo script de Streamlit, reusa
-  `ReportRegistry`, `ClientRegistry`, `orchestrator.run_report`,
-  `BigQueryExecutor` tal cual — ninguna lógica nueva, la UI es una capa de
-  presentación sobre lo que ya existe.
+  `ReportRegistry`, `orchestrator.run_report`, `BigQueryExecutor` tal cual —
+  ninguna lógica nueva, la UI es una capa de presentación sobre lo que ya
+  existe.
 - `Dockerfile.ui`: imagen para un Cloud Run Service separado del de Fase 3
   (`reporting-automation-ui` vs `reporting-automation`).
 - Probado: `tests/unit/test_ui_app.py` (con `streamlit.testing.v1.AppTest`,
   BigQuery mockeado) y en vivo contra BigQuery real (20 reportes listados,
   corrida real de `chats_detalle`, 24 filas, botón de descarga generado).
+
+### Catálogo de compañías: BigQuery, no `config/clients/*.yaml`
+
+El selector de cliente en la UI (`src/reporting_automation/company_catalog.py`,
+función `fetch_active_companies`) se llena en vivo desde
+`data-prd-424213.03_BaseModel.DimCompanies` (`idCompany`/`CompanyName`,
+solo `CompanyIsActive`), no desde `config/clients/*.yaml` — así aparece
+cualquier compañía real, no solo las ~183 ya registradas como `ClientConfig`.
+**Esto es solo en la UI**: la CLI (`run --client`, `run-batch`,
+`new-client`, `import-clients`) sigue usando `ClientConfig`/
+`config/clients/*.yaml` exactamente igual que antes.
+
+Trade-off aceptado: como la UI ya no consulta `ClientConfig`, los PDF/HTML
+generados desde la UI **no llevan branding** (`logo_url`/`primary_color`)
+aunque el cliente sí tenga uno configurado para la CLI — las plantillas ya
+manejan branding vacío con un fallback prolijo, así que no rompe nada, solo
+se pierde el look personalizado en corridas hechas desde la UI.
+
+### Crear un reporte nuevo desde la UI (wizard)
+
+La pestaña "Crear reporte nuevo" registra un reporte ad-hoc (YAML + SQL)
+sin pasar por la CLI: id/nombre/descripción, alcance (`shared` o
+`custom` con una compañía elegida del catálogo de BigQuery), variables
+(una por línea, `nombre:TIPO_BQ` -- mismo formato que `--param` en
+`new-report`), un checkbox para agregar la ventana de tiempo
+(`start_date`/`end_date`, ver sección "Ventanas de tiempo" más arriba), la
+SQL pegada a mano, formatos de salida y una plantilla de layout opcional.
+
+**La SQL se guarda tal cual se pega, sin ningún chequeo de seguridad** —
+mismo nivel de confianza que ya tiene `new-report` en la CLI hoy (que
+tampoco valida la SQL). Al guardar, el reporte queda disponible de
+inmediato en la pestaña "Correr un reporte" (no hace falta reiniciar el
+proceso de Streamlit). Lógica pura, testeable sin Streamlit/BigQuery, en
+`src/reporting_automation/report_wizard.py`.
 
 ### Correrla localmente
 
