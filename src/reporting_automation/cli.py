@@ -39,6 +39,7 @@ from reporting_automation.llm.sql_generator import GeneratedSql, SqlGenerationEr
 from reporting_automation.llm.sql_safety import UnsafeSqlError
 from reporting_automation.orchestrator import run_report
 from reporting_automation.query.bigquery_client import BigQueryExecutor
+from reporting_automation.rendering.template_registry import TemplateNotFoundError, TemplateRegistry
 from reporting_automation.secrets.secret_manager import SecretManagerClient
 
 app = typer.Typer(add_completion=False)
@@ -213,6 +214,12 @@ def new_report(
     default_recipient: list[str] = typer.Option(
         [], "--default-recipient", help="Destinatario por defecto si no se pasa --recipients. Repetible."
     ),
+    template: str = typer.Option(
+        None,
+        "--template",
+        help="Nombre de una plantilla en config/templates/<nombre>.html.j2 (para pdf/html). "
+        "Si se omite, se usa la plantilla default empaquetada.",
+    ),
     description: str = typer.Option(None, "--description"),
     settings_path: str = typer.Option("config/settings.yaml", "--settings"),
 ) -> None:
@@ -228,6 +235,14 @@ def new_report(
     if not sql_file.is_file():
         raise typer.BadParameter(f"No existe el archivo --sql-file: {sql_file}")
 
+    if template:
+        template_registry = TemplateRegistry()
+        template_registry.load(load_settings(settings_path).templates_dir)
+        try:
+            template_registry.get(template)
+        except TemplateNotFoundError as exc:
+            raise typer.BadParameter(str(exc)) from exc
+
     try:
         formats = [OutputFormat(f.strip()) for f in output_formats.split(",") if f.strip()]
     except ValueError as exc:
@@ -236,10 +251,11 @@ def new_report(
         ) from exc
 
     for fmt in formats:
-        if fmt in (OutputFormat.PDF, OutputFormat.GSHEETS):
+        if fmt == OutputFormat.GSHEETS:
             typer.echo(
                 f"Aviso: el renderer de {fmt.value!r} todavia no esta implementado "
-                "(Fase 2). El reporte queda registrado, pero 'run' fallara para ese formato.",
+                "(falta decidir Sheets API vs. export a Drive, ver README). El reporte "
+                "queda registrado, pero 'run' fallara para ese formato.",
                 err=True,
             )
 
@@ -274,6 +290,7 @@ def new_report(
             params_defaults=_parse_params(param_default),
             filename_date_param=filename_date_param,
             description=description,
+            template=template,
         )
     except ValidationError as exc:
         raise typer.BadParameter(str(exc)) from exc

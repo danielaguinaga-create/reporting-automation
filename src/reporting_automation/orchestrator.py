@@ -109,7 +109,15 @@ def run_report(
         output_dir = Path(output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
         base_filename = resolve_base_filename(report, resolved_params, run_date)
-        ctx = RenderContext(base_filename=base_filename, output_dir=output_dir)
+        ctx = RenderContext(
+            base_filename=base_filename,
+            output_dir=output_dir,
+            client_id=client_id,
+            client_display_name=client_config.display_name if client_config else None,
+            client_branding=client_config.branding if client_config else {},
+            resolved_params=resolved_params,
+            generated_at=run_date or date.today(),
+        )
 
         rendered_files = [
             get_renderer(fmt).render(df, report, ctx) for fmt in report.output_formats

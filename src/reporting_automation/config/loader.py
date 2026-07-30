@@ -11,6 +11,7 @@ class Settings(BaseModel):
     bigquery_dataset: str
     reports_dir: str
     clients_dir: str = "config/clients"
+    templates_dir: str = "config/templates"
     trace_bucket: str = "reporting-automation-trace"
     gdrive_root_folder_id: str | None = None
     adhoc_gdrive_folder_id: str | None = None

@@ -233,6 +233,57 @@ Dos ejemplos reales migrados del notebook están en
 `billing_month_date`). Los 12 reportes restantes del notebook siguen uno de
 estos dos patrones y se pueden migrar de la misma forma.
 
+## Plantillas de layout (PDF/HTML)
+
+Inspirado en Oracle BI Publisher: separa **datos** (la query) de **layout**
+(cómo se ve el PDF/HTML) — una plantilla se escribe una vez y se reutiliza
+entre reportes/clientes, sin tocar código Python.
+
+- Formatos `pdf` y `html` usan una plantilla Jinja2
+  (`config/templates/<nombre>.html.j2`). Sin `template:` en la config del
+  reporte, usan una plantilla default empaquetada (tabla simple con título y
+  fecha — mismo look genérico de siempre).
+- `html` es un formato nuevo: preview rápido sin generar PDF, o para
+  destinos que aceptan HTML directamente.
+- Variables disponibles en cualquier plantilla (ver
+  `rendering/template_engine.py`): `title`, `report` (`id`/`name`/
+  `description`), `client` (`id`/`display_name`/`branding` — `None` si no
+  hay cliente registrado), `params` (resueltos), `generated_at`, `rows`,
+  `columns`, `row_count`, `truncated` (PDF recorta a 500 filas, igual que
+  antes).
+- Branding por cliente: `ClientConfig.branding` (ej. `logo_url`,
+  `primary_color`, ver `new-client --bq-param` no aplica aquí — se edita el
+  YAML del cliente directamente por ahora) para que una sola plantilla sirva
+  a varios clientes sin duplicarla.
+
+**Ejemplo incluido:** `config/templates/branded_summary.html.j2` — logo +
+nombre del cliente, parámetros resueltos, tabla de datos. Cópialo/adáptalo
+para un reporte real:
+
+```bash
+python -m reporting_automation new-report --id ... --output-formats html,pdf \
+    --template branded_summary ...
+```
+
+**Nota de compatibilidad:** el comando `ask` (preguntas en lenguaje natural)
+sigue usando `pdf_renderer.build_pdf()` con la misma firma de siempre — por
+dentro ahora renderiza vía la plantilla default + WeasyPrint en vez de
+ReportLab, pero no requirió ningún cambio en `ask.py`.
+
+**Setup local (WeasyPrint necesita librerías de sistema):**
+```bash
+brew install pango   # macOS -- trae cairo/gdk-pixbuf como dependencias
+```
+En Homebrew sobre Apple Silicon, además hay que decirle a macOS dónde están
+esas librerías (si no, `import weasyprint` falla con
+`cannot load library 'libgobject-2.0-0'`):
+```bash
+export DYLD_LIBRARY_PATH=/opt/homebrew/lib   # agregar a ~/.zshrc para que sea permanente
+```
+En Docker (`Dockerfile`/`Dockerfile.ui`) ya está resuelto con
+`apt-get install libpango-1.0-0 libpangocairo-1.0-0 libgdk-pixbuf2.0-0 libffi-dev shared-mime-info`
+(Linux no tiene este problema de rutas).
+
 ## Reportes reutilizables entre clientes (`shared`) + mapeo de clientes
 
 Un reporte `custom` esta atado a un `client_id` fijo en su config (como los

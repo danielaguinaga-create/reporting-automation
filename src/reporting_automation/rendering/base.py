@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
-from typing import Protocol
+from typing import Any, Protocol
 
 import pandas as pd
 
@@ -17,6 +17,13 @@ _INVALID_FILENAME_CHARS = re.compile(r'[\\/:*?"<>|]+')
 class RenderContext:
     base_filename: str
     output_dir: Path
+    # Campos para plantillas (ver rendering/template_engine.py) -- opcionales
+    # con default para no romper construcciones existentes de RenderContext.
+    client_id: str = ""
+    client_display_name: str | None = None
+    client_branding: dict[str, str] = field(default_factory=dict)
+    resolved_params: dict[str, Any] = field(default_factory=dict)
+    generated_at: date = field(default_factory=date.today)
 
 
 @dataclass(frozen=True)

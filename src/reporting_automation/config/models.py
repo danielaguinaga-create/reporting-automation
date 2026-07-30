@@ -8,7 +8,7 @@ from pydantic import BaseModel, Field
 class OutputFormat(str, Enum):
     """Formatos de salida soportados por el diagrama de arquitectura.
 
-    CSV, XLSX, TXT y PDF tienen renderer implementado. GSHEETS queda
+    CSV, XLSX, TXT, PDF y HTML tienen renderer implementado. GSHEETS queda
     declarado para que la config lo pueda referenciar sin romper, pero
     ``rendering.factory.get_renderer`` levanta ``NotImplementedError``
     para el hasta que haya un caso de uso real (ver README, roadmap).
@@ -19,6 +19,7 @@ class OutputFormat(str, Enum):
     PDF = "pdf"
     GSHEETS = "gsheets"
     TXT = "txt"
+    HTML = "html"
 
 
 class ReportKind(str, Enum):
@@ -56,6 +57,10 @@ class ReportConfig(BaseModel):
     filename_pattern: str = "{year}{month}_MD_{report_name}"
     filename_date_param: str | None = None
     description: str | None = None
+    template: str | None = None
+    """Nombre de una plantilla en config/templates/<template>.html.j2. Si es
+    None, PDF/HTML usan la plantilla default empaquetada (ver
+    rendering/pdf_renderer.py y rendering/html_renderer.py)."""
 
 
 class ClientConfig(BaseModel):
@@ -69,3 +74,7 @@ class ClientConfig(BaseModel):
     id: str
     display_name: str
     bq_params: dict[str, str] = Field(default_factory=dict)
+    branding: dict[str, str] = Field(default_factory=dict)
+    """Ej. {"logo_url": "...", "primary_color": "#1a2b3c"} -- opcional, para
+    que las plantillas de reporte puedan usar la marca del cliente sin
+    necesitar una plantilla por cliente."""

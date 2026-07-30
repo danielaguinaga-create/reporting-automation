@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<title>{{ title }}</title>
+<style>
+  body { font-family: Helvetica, Arial, sans-serif; color: #222; background: #fff; margin: 2em; }
+  h1 { font-size: 20px; margin-bottom: 0.2em; }
+  .meta { color: #666; font-size: 12px; margin-bottom: 1.2em; }
+  .note { font-style: italic; color: #666; font-size: 12px; margin: 0.8em 0; }
+  table { border-collapse: collapse; width: 100%; font-size: 11px; }
+  th, td { border: 1px solid #ccc; padding: 4px 8px; text-align: left; }
+  th { background: #2c3e50; color: white; }
+  tr:nth-child(even) { background: #f2f2f2; }
+  p.extra { font-size: 13px; margin: 0.4em 0; }
+  @page { size: landscape; margin: 1.5cm; }
+</style>
+</head>
+<body>
+  <h1>{{ title }}</h1>
+  <div class="meta">
+    Generado: {{ generated_at }}
+    {%- if client %} &middot; Cliente: {{ client.display_name }}{% endif %}
+    {%- if params %} &middot; {% for k, v in params.items() %}{{ k }}={{ v }}{{ ", " if not loop.last }}{% endfor %}{% endif %}
+  </div>
+
+  {% for para in extra_paragraphs %}
+  <p class="extra">{{ para | safe }}</p>
+  {% endfor %}
+
+  {% if truncated %}
+  <p class="note">Mostrando las primeras {{ rows | length }} de {{ row_count }} filas -- usa CSV o XLSX para el detalle completo.</p>
+  {% endif %}
+
+  <table>
+    <thead>
+      <tr>{% for col in columns %}<th>{{ col }}</th>{% endfor %}</tr>
+    </thead>
+    <tbody>
+      {% for row in rows %}
+      <tr>{% for col in columns %}<td>{{ row[col] }}</td>{% endfor %}</tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</body>
+</html>
