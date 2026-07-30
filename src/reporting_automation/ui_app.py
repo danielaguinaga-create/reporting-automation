@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
+
+os.environ.setdefault("DYLD_LIBRARY_PATH", "/opt/homebrew/lib")
 
 import streamlit as st
 from google.cloud import bigquery
