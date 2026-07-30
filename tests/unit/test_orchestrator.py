@@ -225,3 +225,95 @@ def test_run_report_unregistered_client_has_no_bq_params(tmp_path, registry, cli
     # esto con ValueError por parametro faltante (ver test_bigquery_client).
     assert result.status == "success"
     assert executor.last_call["params"] == {}
+
+
+def test_resolve_params_window_resolves_start_and_end_date():
+    resolved = resolve_params(
+        params_schema={"start_date": "DATE", "end_date": "DATE"},
+        params_defaults={},
+        params={},
+        run_date=date(2026, 6, 15),
+        window="previous_month",
+    )
+    assert resolved == {"start_date": "2026-05-01", "end_date": "2026-05-31"}
+
+
+def test_resolve_params_window_only_fills_declared_fields():
+    resolved = resolve_params(
+        params_schema={"start_date": "DATE"},
+        params_defaults={},
+        params={},
+        run_date=date(2026, 6, 15),
+        window="year_to_date",
+    )
+    assert resolved == {"start_date": "2026-01-01"}
+
+
+def test_resolve_params_explicit_param_overrides_window():
+    resolved = resolve_params(
+        params_schema={"start_date": "DATE", "end_date": "DATE"},
+        params_defaults={},
+        params={"start_date": "2020-01-01"},
+        run_date=date(2026, 6, 15),
+        window="previous_month",
+    )
+    assert resolved == {"start_date": "2020-01-01", "end_date": "2026-05-31"}
+
+
+def test_resolve_params_client_params_override_window():
+    resolved = resolve_params(
+        params_schema={"start_date": "DATE", "end_date": "DATE"},
+        params_defaults={},
+        params={},
+        client_params={"start_date": "from-client"},
+        run_date=date(2026, 6, 15),
+        window="previous_month",
+    )
+    assert resolved == {"start_date": "from-client", "end_date": "2026-05-31"}
+
+
+def test_resolve_params_window_raises_when_report_has_no_window_fields():
+    with pytest.raises(ValueError, match="no aplica"):
+        resolve_params(
+            params_schema={"id_company": "STRING"},
+            params_defaults={},
+            params={},
+            run_date=date(2026, 6, 15),
+            window="previous_month",
+        )
+
+
+def test_run_report_with_window_resolves_dates(tmp_path, registry):
+    executor = FakeExecutor(pd.DataFrame({"dummy_col": [1]}))
+
+    result = run_report(
+        report_id="windowed_report",
+        client_id="acme",
+        params={},
+        output_dir=tmp_path,
+        registry=registry,
+        executor=executor,
+        run_date=date(2026, 6, 15),
+        window="last_7_days",
+    )
+
+    assert result.status == "success"
+    assert executor.last_call["params"] == {"start_date": "2026-06-09", "end_date": "2026-06-15"}
+
+
+def test_run_report_with_unsupported_window_returns_failure(tmp_path, registry):
+    executor = FakeExecutor(pd.DataFrame({"dummy_col": [1]}))
+
+    result = run_report(
+        report_id="windowed_report",
+        client_id="acme",
+        params={},
+        output_dir=tmp_path,
+        registry=registry,
+        executor=executor,
+        run_date=date(2026, 6, 15),
+        window="not_a_real_preset",
+    )
+
+    assert result.status == "failure"
+    assert "Preset de ventana no soportado" in result.error

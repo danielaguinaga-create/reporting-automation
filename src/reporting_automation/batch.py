@@ -18,6 +18,7 @@ class BatchEntry(BaseModel):
     client: str
     params: dict[str, Any] = Field(default_factory=dict)
     recipients: list[str] = Field(default_factory=list)
+    window: str | None = None
 
 
 def load_batch_manifest(path: str | Path) -> list[BatchEntry]:
@@ -64,6 +65,7 @@ def run_batch(
             executor=executor,
             client_registry=client_registry,
             run_date=run_date,
+            window=entry.window,
         )
         results.append(result)
     return results

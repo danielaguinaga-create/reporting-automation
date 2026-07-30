@@ -63,6 +63,50 @@ def test_shared_report_with_known_client_does_not_ask_for_client_resolved_params
     assert any("Resuelto autom" in c.value for c in at.caption)
 
 
+def test_windowed_report_shows_preset_selectbox_not_raw_text_inputs():
+    """chats_detalle_rango declara start_date/end_date -- la UI debe ofrecer
+    el selector de presets en vez de pedirlos como texto libre."""
+    at = AppTest.from_file(APP_PATH)
+    at.run()
+    assert not at.exception
+
+    at.selectbox[0].select("chats_detalle_rango").run()
+    at.selectbox[1].select("protec").run()
+
+    assert not at.exception
+    assert not any(ti.label.startswith("start_date") for ti in at.text_input)
+    assert not any(ti.label.startswith("end_date") for ti in at.text_input)
+    assert len(at.selectbox) == 3  # Reporte, Cliente, Preset de ventana
+    assert any("Resuelto autom" in c.value for c in at.caption)
+
+
+def test_windowed_report_custom_range_shows_date_inputs():
+    at = AppTest.from_file(APP_PATH)
+    at.run()
+    assert not at.exception
+
+    at.selectbox[0].select("chats_detalle_rango").run()
+    at.selectbox[1].select("protec").run()
+    at.selectbox[2].select("Rango personalizado").run()
+
+    assert not at.exception
+    assert len(at.date_input) == 2
+
+
+def test_running_windowed_report_with_preset_succeeds(monkeypatch):
+    monkeypatch.setattr("google.cloud.bigquery.Client", FakeBigQueryClient)
+
+    at = AppTest.from_file(APP_PATH)
+    at.run()
+
+    at.selectbox[0].select("chats_detalle_rango").run()
+    at.selectbox[1].select("protec").run()
+    at.button[0].click().run()
+
+    assert not at.exception
+    assert len(at.success) == 1
+
+
 def test_running_a_report_with_orchestrator_failure_shows_error(monkeypatch):
     class BoomBigQueryClient:
         def __init__(self, project: str | None = None):

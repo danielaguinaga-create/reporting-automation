@@ -41,6 +41,7 @@ from reporting_automation.orchestrator import run_report
 from reporting_automation.query.bigquery_client import BigQueryExecutor
 from reporting_automation.rendering.template_registry import TemplateNotFoundError, TemplateRegistry
 from reporting_automation.secrets.secret_manager import SecretManagerClient
+from reporting_automation.time_window import WINDOW_PRESETS
 
 app = typer.Typer(add_completion=False)
 
@@ -106,6 +107,12 @@ def run(
     param: list[str] = typer.Option(
         [], "--param", help="Parametro key=value para la query. Repetible."
     ),
+    window: str = typer.Option(
+        None,
+        "--window",
+        help="Preset de ventana de tiempo (ver list-window-presets). Solo aplica si el "
+        "reporte declara start_date/end_date en params_schema.",
+    ),
     deliver: bool = typer.Option(
         False,
         "--deliver",
@@ -129,6 +136,11 @@ def run(
     Requiere credenciales validas (ej. `gcloud auth application-default
     login`) — no cubierto por los tests unitarios, que mockean el cliente.
     """
+    if window is not None and window not in WINDOW_PRESETS:
+        raise typer.BadParameter(
+            f"--window debe ser uno de {sorted(WINDOW_PRESETS)}, recibido: {window!r}"
+        )
+
     settings, registry = _load_settings_and_registry(settings_path)
     client_registry = _load_client_registry(settings)
     params = _parse_params(param)
@@ -144,6 +156,7 @@ def run(
         registry=registry,
         executor=executor,
         client_registry=client_registry,
+        window=window,
     )
 
     if result.status == "failure":
@@ -327,6 +340,14 @@ def list_clients(
     for c in clients:
         bq_params_preview = ", ".join(f"{k}={v}" for k, v in c.bq_params.items())
         typer.echo(f"{c.id}\t{c.display_name}\t{bq_params_preview}")
+
+
+@app.command("list-window-presets")
+def list_window_presets() -> None:
+    """Presets validos para `run --window` (solo aplica a reportes que declaren
+    start_date/end_date en params_schema -- ver README, seccion Ventanas de tiempo)."""
+    for key, label in WINDOW_PRESETS.items():
+        typer.echo(f"{key}\t{label}")
 
 
 @app.command("new-client")

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from datetime import date
 from pathlib import Path
 
 os.environ.setdefault("DYLD_LIBRARY_PATH", "/opt/homebrew/lib")
@@ -14,6 +15,10 @@ from reporting_automation.config.models import ReportKind
 from reporting_automation.config.registry import ReportRegistry
 from reporting_automation.orchestrator import run_report
 from reporting_automation.query.bigquery_client import BigQueryExecutor
+from reporting_automation.time_window import WINDOW_PRESETS, resolve_window
+
+_WINDOW_PARAM_NAMES = ("start_date", "end_date")
+_CUSTOM_WINDOW_KEY = "custom"
 
 st.set_page_config(page_title="Reporting Automation", page_icon="📊")
 
@@ -68,10 +73,38 @@ if client_params:
     resolved_preview = ", ".join(f"{k}={v}" for k, v in client_params.items())
     st.caption(f"Resuelto automáticamente desde el cliente: {resolved_preview}")
 
-if params_needing_input:
+window_fields = [name for name in _WINDOW_PARAM_NAMES if name in params_needing_input]
+other_fields = {
+    name: bq_type for name, bq_type in params_needing_input.items() if name not in window_fields
+}
+
+if window_fields:
+    st.subheader("Ventana de tiempo")
+    preset_labels = {**WINDOW_PRESETS, _CUSTOM_WINDOW_KEY: "Rango personalizado"}
+    preset = st.selectbox(
+        "Preset",
+        list(preset_labels.keys()),
+        format_func=lambda k: preset_labels[k],
+        key="window_preset",
+    )
+    if preset == _CUSTOM_WINDOW_KEY:
+        col_start, col_end = st.columns(2)
+        with col_start:
+            start = st.date_input("Desde", value=date.today(), key="window_start")
+        with col_end:
+            end = st.date_input("Hasta", value=date.today(), key="window_end")
+        start_iso, end_iso = start.isoformat(), end.isoformat()
+    else:
+        start_iso, end_iso = resolve_window(preset, date.today())
+        st.caption(f"Resuelto automáticamente: {start_iso} a {end_iso}")
+    for name, value in zip(_WINDOW_PARAM_NAMES, (start_iso, end_iso)):
+        if name in window_fields:
+            params[name] = value
+
+if other_fields:
     st.subheader("Parámetros")
     st.caption("Déjalos vacíos para usar el valor por defecto del reporte (si tiene uno).")
-    for name, bq_type in params_needing_input.items():
+    for name, bq_type in other_fields.items():
         default_hint = report.params_defaults.get(name, "")
         value = st.text_input(
             f"{name} ({bq_type})",

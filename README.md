@@ -73,6 +73,55 @@ python -m reporting_automation run --report runa_colaboradores_chats_mensual --c
 # el primer día del mes anterior a la fecha de ejecución.
 ```
 
+## Ventanas de tiempo (`--window`)
+
+Para reportes que necesitan correr sobre un rango de fechas variable (no un
+único mes fijo), la convención es declarar dos params DATE llamados
+exactamente `start_date` y `end_date` en `params_schema`, y usarlos en la
+SQL con `BETWEEN @start_date AND @end_date` (envolviendo la columna en
+`DATE(...)` si es un TIMESTAMP, ej. `DATE(c.ChatSentAtUTC)`). No hace falta
+declarar nada más en la config del reporte -- el sistema reconoce esos dos
+nombres automáticamente, igual que reconoce `id_company` como param de
+cliente.
+
+Un rango 100% custom ya funciona hoy sin nada nuevo:
+
+```bash
+python -m reporting_automation run --report chats_detalle_rango --client protec \
+    --param start_date=2026-01-01 --param end_date=2026-01-31 --output-dir ./out
+```
+
+Para no tener que calcular fechas a mano, `--window <preset>` resuelve un
+rango relativo a la fecha de ejecución:
+
+```bash
+python -m reporting_automation list-window-presets
+
+python -m reporting_automation run --report chats_detalle_rango --client protec \
+    --window last_30_days --output-dir ./out
+```
+
+| preset | rango |
+|---|---|
+| `previous_month` | mes calendario anterior completo |
+| `current_month` | del 1° del mes actual a la fecha de ejecución |
+| `last_7_days` | últimos 7 días (incluye la fecha de ejecución) |
+| `last_30_days` | últimos 30 días |
+| `last_90_days` | últimos 90 días |
+| `year_to_date` | del 1° de enero a la fecha de ejecución |
+
+Un `--param start_date=...`/`end_date=...` explícito siempre gana por
+encima de `--window` (mismo criterio que con cualquier otro param). En el
+manifiesto de `run-batch` (`config/monthly_batch.yaml`), cada entrada puede
+declarar `window: <preset>` en vez de fechas fijas en `params`. En la UI de
+Streamlit, un reporte con `start_date`/`end_date` muestra un selector de
+presets (con "Rango personalizado" para elegir fechas a mano) en vez de
+pedirlos como texto libre.
+
+`chats_detalle_rango` (en `config/reports/shared/`) es la plantilla de
+referencia para copiar este patrón en un reporte nuevo -- no está en
+`config/monthly_batch.yaml` a propósito, es solo un ejemplo.
+
 ## Corrida mensual (`run-batch`)
 
 Generar todos los reportes recurrentes de un jalón, en vez de invocar `run`
@@ -91,6 +140,9 @@ después). Cada línea es:
   client: avanza_seguros
 - report: chats_detalle
   client: cobee   # el mismo reporte "shared" puede repetirse para otro cliente
+- report: chats_detalle_rango
+  client: protec
+  window: previous_month   # ver seccion "Ventanas de tiempo" mas arriba
 ```
 
 Cada entrada escribe en `output_dir/<client>/` (no directo en `output_dir`):

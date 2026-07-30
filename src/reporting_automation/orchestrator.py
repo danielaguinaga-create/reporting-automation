@@ -11,12 +11,17 @@ from reporting_automation.query.bigquery_client import BigQueryExecutor
 from reporting_automation.query.sql_loader import load_sql
 from reporting_automation.rendering.base import RenderContext, RenderedFile, resolve_base_filename
 from reporting_automation.rendering.factory import get_renderer
+from reporting_automation.time_window import previous_month_first_day, resolve_window
 
 # Sentinels reconocidos en `ReportConfig.params_defaults`. Hoy solo cubre el
 # caso del notebook (mes de facturacion anterior). Cloud Scheduler (Fase 3)
 # publica el mismo mensaje todos los meses, asi que las fechas se resuelven
 # aqui en tiempo de ejecucion en vez de vivir en la config del Scheduler.
 _PREVIOUS_MONTH_FIRST_DAY = "previous_month_first_day"
+
+# Nombres de param reconocidos como "ventana de tiempo" (ver `resolve_window`
+# en `time_window.py`) cuando un reporte los declara en `params_schema`.
+_WINDOW_PARAM_NAMES = ("start_date", "end_date")
 
 
 @dataclass(frozen=True)
@@ -30,28 +35,23 @@ class ReportRunResult:
     error: str | None = None
 
 
-def _previous_month_first_day(run_date: date) -> str:
-    year, month = run_date.year, run_date.month
-    if month == 1:
-        year, month = year - 1, 12
-    else:
-        month -= 1
-    return date(year, month, 1).isoformat()
-
-
 def resolve_params(
     params_schema: dict[str, str],
     params_defaults: dict[str, str],
     params: dict[str, Any],
     client_params: dict[str, Any] | None = None,
     run_date: date | None = None,
+    window: str | None = None,
 ) -> dict[str, Any]:
     """Resuelve los params finales para una corrida, en orden de prioridad:
 
     1. `params` explicitos (ej. `--param` en la CLI) — siempre ganan.
     2. `client_params` del `ClientConfig` del cliente (ej. su `id_company`),
        para que reportes `shared` no requieran pegar ese valor a mano.
-    3. `params_defaults` del reporte (con sentinels como
+    3. `window` (preset de ventana de tiempo, ver `time_window.py`) — solo
+       aplica a los nombres `start_date`/`end_date` si el reporte los
+       declara en `params_schema`.
+    4. `params_defaults` del reporte (con sentinels como
        `previous_month_first_day` resueltos contra `run_date`).
     """
     run_date = run_date or date.today()
@@ -62,10 +62,23 @@ def resolve_params(
         if name in params_defaults:
             default = params_defaults[name]
             resolved[name] = (
-                _previous_month_first_day(run_date)
+                previous_month_first_day(run_date)
                 if default == _PREVIOUS_MONTH_FIRST_DAY
                 else default
             )
+
+    if window is not None:
+        window_fields = [n for n in _WINDOW_PARAM_NAMES if n in params_schema]
+        if not window_fields:
+            raise ValueError(
+                f"--window {window!r} no aplica: el reporte no declara "
+                f"start_date ni end_date en params_schema"
+            )
+        start, end = resolve_window(window, run_date)
+        for name, value in zip(_WINDOW_PARAM_NAMES, (start, end)):
+            if name in params_schema:
+                resolved[name] = value
+
     resolved.update(client_params)
     resolved.update(params)
     return resolved
@@ -80,6 +93,7 @@ def run_report(
     executor: BigQueryExecutor,
     client_registry: ClientRegistry | None = None,
     run_date: date | None = None,
+    window: str | None = None,
 ) -> ReportRunResult:
     """El "Def Main" del diagrama, acotado a Fase 1.
 
@@ -91,6 +105,11 @@ def run_report(
     Si `client_registry` tiene un `ClientConfig` para `client_id`, sus
     `bq_params` (ej. `id_company`) se inyectan automaticamente para
     cualquier nombre que el reporte declare en `params_schema`.
+
+    `window` (ver `time_window.py`) resuelve `start_date`/`end_date` a un
+    preset relativo (ej. `previous_month`, `last_30_days`) si el reporte
+    los declara en `params_schema` -- para un rango 100% custom, alcanza
+    con pasar esos mismos nombres en `params`.
     """
     try:
         report = registry.get(report_id)
@@ -100,7 +119,12 @@ def run_report(
         client_params = client_config.bq_params if client_config else {}
 
         resolved_params = resolve_params(
-            report.params_schema, report.params_defaults, params, client_params, run_date
+            report.params_schema,
+            report.params_defaults,
+            params,
+            client_params,
+            run_date,
+            window,
         )
 
         sql = load_sql(report, sql_dir)

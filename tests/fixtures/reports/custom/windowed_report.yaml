@@ -1,0 +1,11 @@
+id: windowed_report
+name: WindowedReport
+kind: shared
+sql_file: windowed_report.sql
+output_formats: [csv]
+default_recipients: []
+params_schema:
+  start_date: DATE
+  end_date: DATE
+params_defaults: {}
+description: "Fixture para probar la resolucion de --window (start_date/end_date)."
