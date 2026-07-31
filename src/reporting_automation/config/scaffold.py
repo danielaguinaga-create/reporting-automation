@@ -36,6 +36,26 @@ def scaffold_report(reports_dir: Path, report: ReportConfig, sql_text: str) -> t
     return yaml_path, sql_path
 
 
+def delete_report(reports_dir: Path, report: ReportConfig) -> tuple[Path, Path]:
+    """Borra el par <id>.yaml + <sql_file> de un reporte existente.
+
+    Contraparte de `scaffold_report`: no toca codigo Python, `ReportRegistry.load()`
+    simplemente deja de encontrar el reporte la proxima vez que corra.
+    """
+    kind_dir = Path(reports_dir) / report.kind.value
+    yaml_path = kind_dir / f"{report.id}.yaml"
+    sql_path = kind_dir / report.sql_file
+
+    if not yaml_path.is_file():
+        raise ReportConfigError(f"No existe un reporte en {kind_dir} con id={report.id!r}")
+
+    yaml_path.unlink()
+    if sql_path.is_file():
+        sql_path.unlink()
+
+    return yaml_path, sql_path
+
+
 def scaffold_client(clients_dir: Path, client: ClientConfig, overwrite: bool = False) -> Path:
     """Crea (o sobreescribe, si `overwrite=True`) `<id>.yaml` para un cliente.
 

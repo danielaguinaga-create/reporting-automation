@@ -132,7 +132,7 @@ def run_report(
 
         output_dir = Path(output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
-        base_filename = resolve_base_filename(report, resolved_params, run_date)
+        base_filename = resolve_base_filename(report, resolved_params, run_date, company=client_id)
         ctx = RenderContext(
             base_filename=base_filename,
             output_dir=output_dir,

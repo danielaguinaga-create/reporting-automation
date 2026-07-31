@@ -15,7 +15,13 @@ WINDOW_PRESETS: dict[str, str] = {
     "last_30_days": "Ultimos 30 dias",
     "last_90_days": "Ultimos 90 dias",
     "year_to_date": "Ano a la fecha",
+    "all_time": "All Time",
 }
+
+# Cota inferior para el preset "all_time" -- lo bastante vieja como para no
+# excluir ningun dato real (los datasets de Meeting Doctors arrancan bien
+# despues de esta fecha).
+_ALL_TIME_START = date(1970, 1, 1)
 
 
 def previous_month_first_day(run_date: date) -> str:
@@ -53,6 +59,9 @@ def resolve_window(preset: str, run_date: date) -> tuple[str, str]:
         end = run_date
     elif preset == "year_to_date":
         start = date(run_date.year, 1, 1)
+        end = run_date
+    elif preset == "all_time":
+        start = _ALL_TIME_START
         end = run_date
     else:
         raise ValueError(

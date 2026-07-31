@@ -42,6 +42,10 @@ def test_year_to_date():
     assert resolve_window("year_to_date", date(2026, 6, 15)) == ("2026-01-01", "2026-06-15")
 
 
+def test_all_time_spans_from_epoch_to_run_date():
+    assert resolve_window("all_time", date(2026, 6, 15)) == ("1970-01-01", "2026-06-15")
+
+
 def test_unknown_preset_raises_clear_error():
     with pytest.raises(ValueError, match="Preset de ventana no soportado"):
         resolve_window("does_not_exist", date(2026, 6, 15))

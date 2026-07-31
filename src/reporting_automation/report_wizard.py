@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from reporting_automation.config.models import OutputFormat, ReportConfig, ReportKind
-from reporting_automation.config.scaffold import scaffold_report
+from reporting_automation.config.scaffold import delete_report, scaffold_report
 from reporting_automation.query.bigquery_client import parse_param_declaration
 
 # Convencion ya usada por `orchestrator.resolve_params`/`time_window.py`: un
@@ -73,3 +73,8 @@ def save_new_report(reports_dir: Path, form: WizardInput) -> tuple[Path, Path]:
     `scaffold_report` -- misma funcion que ya usa `new-report` en la CLI."""
     report = build_report_config(form)
     return scaffold_report(reports_dir, report, form.sql_text)
+
+
+def delete_existing_report(reports_dir: Path, report: ReportConfig) -> tuple[Path, Path]:
+    """Borra el YAML + SQL de un reporte ya registrado."""
+    return delete_report(reports_dir, report)

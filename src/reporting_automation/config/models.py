@@ -54,7 +54,7 @@ class ReportConfig(BaseModel):
     delivery_channels: list[DeliveryChannel] = Field(default_factory=list)
     params_schema: dict[str, str] = Field(default_factory=dict)
     params_defaults: dict[str, str] = Field(default_factory=dict)
-    filename_pattern: str = "{year}{month}_MD_{report_name}"
+    filename_pattern: str = "{year}{month}_MD_{company}_{report_name}"
     filename_date_param: str | None = None
     description: str | None = None
     template: str | None = None

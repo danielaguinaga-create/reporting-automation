@@ -3,7 +3,7 @@ import pytest
 from reporting_automation.config.client_registry import ClientRegistry
 from reporting_automation.config.models import ClientConfig, OutputFormat, ReportConfig, ReportKind
 from reporting_automation.config.registry import ReportRegistry
-from reporting_automation.config.scaffold import scaffold_client, scaffold_report
+from reporting_automation.config.scaffold import delete_report, scaffold_client, scaffold_report
 from reporting_automation.exceptions import ClientConfigError, ReportConfigError
 
 
@@ -58,6 +58,33 @@ def test_scaffold_report_refuses_to_overwrite_existing(tmp_path):
 
     with pytest.raises(ReportConfigError, match="Ya existe"):
         scaffold_report(tmp_path, _report(), "SELECT 2;")
+
+
+def test_delete_report_removes_yaml_and_sql(tmp_path):
+    yaml_path, sql_path = scaffold_report(tmp_path, _report(), "SELECT 1;")
+    assert yaml_path.is_file()
+    assert sql_path.is_file()
+
+    deleted_yaml, deleted_sql = delete_report(tmp_path, _report())
+
+    assert deleted_yaml == yaml_path
+    assert deleted_sql == sql_path
+    assert not yaml_path.exists()
+    assert not sql_path.exists()
+
+
+def test_delete_report_shared_kind_uses_shared_dir(tmp_path):
+    report = _report(kind=ReportKind.SHARED, client_id=None)
+    yaml_path, _ = scaffold_report(tmp_path, report, "SELECT 1;")
+
+    delete_report(tmp_path, report)
+
+    assert not yaml_path.exists()
+
+
+def test_delete_report_raises_if_not_found(tmp_path):
+    with pytest.raises(ReportConfigError, match="No existe"):
+        delete_report(tmp_path, _report())
 
 
 def test_scaffold_client_writes_yaml(tmp_path):

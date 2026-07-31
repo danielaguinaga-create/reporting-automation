@@ -50,8 +50,8 @@ def test_run_report_success_renders_all_formats(tmp_path, registry):
     assert result.rows == 1
     assert result.columns == 2
     assert {f.local_path.name for f in result.rendered_files} == {
-        "202605_MD_SampleReport.csv",
-        "202605_MD_SampleReport.xlsx",
+        "202605_MD_acme_SampleReport.csv",
+        "202605_MD_acme_SampleReport.xlsx",
     }
     for f in result.rendered_files:
         assert f.local_path.is_file()
@@ -125,7 +125,7 @@ def test_run_report_without_params_uses_simple_report(tmp_path, registry):
 
     assert result.status == "success"
     assert result.rows == 3
-    assert [f.filename for f in result.rendered_files] == ["202603_MD_SimpleReport.csv"]
+    assert [f.filename for f in result.rendered_files] == ["202603_MD_acme_SimpleReport.csv"]
 
 
 def test_resolve_params_leaves_explicit_values_untouched():

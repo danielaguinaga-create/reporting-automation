@@ -114,6 +114,14 @@ def test_resolve_base_filename_uses_date_param_when_declared():
     assert name == "202601_MD_ChatsByUser"
 
 
+def test_resolve_base_filename_uses_default_pattern_with_company():
+    report = _report(name="UsuariosActivos")
+    name = resolve_base_filename(
+        report, params={}, run_date=date(2026, 6, 15), company="bloss_med"
+    )
+    assert name == "202606_MD_bloss_med_UsuariosActivos"
+
+
 def test_resolve_base_filename_missing_date_param_raises():
     report = _report(filename_date_param="billing_month_date")
     with pytest.raises(ValueError, match="filename_date_param"):

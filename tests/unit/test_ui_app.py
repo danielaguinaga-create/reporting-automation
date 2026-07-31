@@ -1,7 +1,10 @@
 from pathlib import Path
 
 import pandas as pd
+import pytest
 from streamlit.testing.v1 import AppTest
+
+from reporting_automation.config.models import ReportKind
 
 APP_PATH = str(
     Path(__file__).resolve().parents[2] / "src" / "reporting_automation" / "ui_app.py"
@@ -172,8 +175,7 @@ def test_wizard_save_success_calls_save_new_report_and_reruns(monkeypatch):
     at = AppTest.from_file(APP_PATH)
     at.run()
 
-    at.text_input(key="wizard_id").set_value("nuevo_reporte_test").run()
-    at.text_input(key="wizard_name").set_value("NuevoReporteTest").run()
+    at.text_input(key="wizard_name").set_value("Nuevo Reporte Test").run()
     at.text_area(key="wizard_sql").set_value("SELECT 1;").run()
 
     save_button = next(b for b in at.button if b.label == "Guardar como plantilla")
@@ -186,7 +188,64 @@ def test_wizard_save_success_calls_save_new_report_and_reruns(monkeypatch):
     assert len(at.success) == 1
 
 
-def test_wizard_save_without_id_shows_error(monkeypatch):
+def test_wizard_is_per_company_defaults_to_true_and_shows_scope_radio(monkeypatch):
+    monkeypatch.setattr("google.cloud.bigquery.Client", FakeBigQueryClient)
+
+    at = AppTest.from_file(APP_PATH)
+    at.run()
+
+    assert not at.exception
+    assert at.radio(key="wizard_is_per_company").value is True
+    assert at.radio(key="wizard_scope") is not None
+
+
+def test_wizard_not_per_company_hides_scope_radio_and_saves_without_client(monkeypatch):
+    monkeypatch.setattr("google.cloud.bigquery.Client", FakeBigQueryClient)
+
+    calls = []
+
+    def fake_save_new_report(reports_dir, form):
+        calls.append(form)
+        return Path("/tmp/fake/custom/x.yaml"), Path("/tmp/fake/custom/x.sql")
+
+    monkeypatch.setattr("reporting_automation.report_wizard.save_new_report", fake_save_new_report)
+
+    at = AppTest.from_file(APP_PATH)
+    at.run()
+
+    at.radio(key="wizard_is_per_company").set_value(False).run()
+
+    assert not at.exception
+    with pytest.raises(KeyError):
+        at.radio(key="wizard_scope")
+
+    at.text_input(key="wizard_name").set_value("Reporte General Test").run()
+    at.text_area(key="wizard_sql").set_value("SELECT 1;").run()
+
+    save_button = next(b for b in at.button if b.label == "Guardar como plantilla")
+    save_button.click().run()
+
+    assert not at.exception
+    assert len(calls) == 1
+    assert calls[0].id == "reporte_general_test"
+    assert calls[0].kind == ReportKind.CUSTOM
+    assert calls[0].client_id is None
+
+
+def test_wizard_id_field_autogenerates_from_name(monkeypatch):
+    monkeypatch.setattr("google.cloud.bigquery.Client", FakeBigQueryClient)
+
+    at = AppTest.from_file(APP_PATH)
+    at.run()
+
+    at.text_input(key="wizard_name").set_value("Chats Por Especialidad").run()
+
+    id_display = next(ti for ti in at.text_input if ti.label.startswith("ID del reporte"))
+    assert id_display.value == "chats_por_especialidad"
+    assert id_display.disabled
+
+
+def test_wizard_save_without_name_shows_error(monkeypatch):
     monkeypatch.setattr("google.cloud.bigquery.Client", FakeBigQueryClient)
 
     at = AppTest.from_file(APP_PATH)
@@ -197,6 +256,62 @@ def test_wizard_save_without_id_shows_error(monkeypatch):
 
     assert not at.exception
     assert len(at.error) == 1
+
+
+def test_delete_section_lists_existing_reports_and_is_disabled_without_confirmation(monkeypatch):
+    monkeypatch.setattr("google.cloud.bigquery.Client", FakeBigQueryClient)
+
+    at = AppTest.from_file(APP_PATH)
+    at.run()
+
+    assert not at.exception
+    delete_selectbox = at.selectbox(key="wizard_delete_id")
+    assert "chats_detalle" in delete_selectbox.options
+
+    delete_button = next(b for b in at.button if b.key == "wizard_delete_button")
+    assert delete_button.disabled
+
+
+def test_delete_button_enabled_and_calls_delete_existing_report_on_matching_confirmation(
+    monkeypatch,
+):
+    monkeypatch.setattr("google.cloud.bigquery.Client", FakeBigQueryClient)
+
+    calls = []
+
+    def fake_delete_existing_report(reports_dir, report):
+        calls.append(report.id)
+        return Path(f"/tmp/fake/shared/{report.id}.yaml"), Path(f"/tmp/fake/shared/{report.id}.sql")
+
+    monkeypatch.setattr(
+        "reporting_automation.report_wizard.delete_existing_report", fake_delete_existing_report
+    )
+
+    at = AppTest.from_file(APP_PATH)
+    at.run()
+
+    delete_id = at.selectbox(key="wizard_delete_id").value
+    at.text_input(key="wizard_delete_confirm").set_value(delete_id).run()
+
+    delete_button = next(b for b in at.button if b.key == "wizard_delete_button")
+    assert not delete_button.disabled
+    delete_button.click().run()
+
+    assert not at.exception
+    assert calls == [delete_id]
+    assert len(at.success) == 1
+
+
+def test_delete_button_disabled_when_confirmation_text_does_not_match(monkeypatch):
+    monkeypatch.setattr("google.cloud.bigquery.Client", FakeBigQueryClient)
+
+    at = AppTest.from_file(APP_PATH)
+    at.run()
+
+    at.text_input(key="wizard_delete_confirm").set_value("id_incorrecto").run()
+
+    delete_button = next(b for b in at.button if b.key == "wizard_delete_button")
+    assert delete_button.disabled
 
 
 def test_wizard_custom_scope_uses_bigquery_company_picker(monkeypatch):

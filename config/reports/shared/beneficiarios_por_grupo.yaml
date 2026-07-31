@@ -1,0 +1,17 @@
+id: beneficiarios_por_grupo
+name: BeneficiariosPorGrupo
+kind: shared
+sql_file: beneficiarios_por_grupo.sql
+output_formats:
+- csv
+default_recipients: []
+delivery_channels: []
+params_schema:
+  id_company: STRING
+  start_date: DATE
+  end_date: DATE
+params_defaults: {}
+filename_pattern: '{year}{month}_MD_{company}_{report_name}'
+description: 'Cantidad de beneficiarios (altas/bajas/activos en el mes) agrupados
+  por tipo de usuario y grupo de compañia, para cualquier cliente via --client. Ventana
+  de tiempo configurable (default: mes anterior).'

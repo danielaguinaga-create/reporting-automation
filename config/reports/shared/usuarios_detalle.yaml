@@ -5,9 +5,13 @@ sql_file: usuarios_detalle.sql
 output_formats:
 - csv
 default_recipients: []
+delivery_channels: []
 params_schema:
   id_company: STRING
-params_defaults: {}
-filename_pattern: '{year}{month}_MD_{report_name}'
-description: Detalle completo de usuarios (datos personales, cobertura, estado) para
-  cualquier cliente via --client
+  target_month_date: DATE
+params_defaults:
+  target_month_date: previous_month_first_day
+filename_pattern: '{year}{month}_MD_{company}_{report_name}'
+description: 'Detalle de usuarios (datos personales, contrato, cobertura, tipo, status
+  y fechas clave) para cualquier cliente via --client, acumulado hasta el mes objetivo
+  (default: mes anterior).'

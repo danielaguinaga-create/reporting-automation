@@ -46,6 +46,7 @@ def resolve_base_filename(
     report: ReportConfig,
     params: dict[str, str],
     run_date: date | None = None,
+    company: str = "",
 ) -> str:
     """Calcula el nombre base (sin extension) siguiendo `report.filename_pattern`.
 
@@ -65,5 +66,7 @@ def resolve_base_filename(
         d = run_date or date.today()
         year, month = f"{d.year}", f"{d.month:02d}"
 
-    name = report.filename_pattern.format(year=year, month=month, report_name=report.name)
+    name = report.filename_pattern.format(
+        year=year, month=month, company=company, report_name=report.name
+    )
     return safe_filename_component(name)

@@ -19,7 +19,7 @@ from reporting_automation.exceptions import ReportConfigError
 from reporting_automation.orchestrator import run_report
 from reporting_automation.query.bigquery_client import BigQueryExecutor
 from reporting_automation.rendering.template_registry import TemplateRegistry
-from reporting_automation.report_wizard import WizardInput, save_new_report
+from reporting_automation.report_wizard import WizardInput, delete_existing_report, save_new_report
 from reporting_automation.time_window import WINDOW_PRESETS, resolve_window
 
 _WINDOW_PARAM_NAMES = ("start_date", "end_date")
@@ -78,101 +78,114 @@ tab_run, tab_new = st.tabs(["Correr un reporte", "Crear reporte nuevo"])
 with tab_run:
     report_ids = sorted(r.id for r in registry.list_all())
     if not report_ids:
-        st.warning("No hay reportes registrados.")
-        st.stop()
-
-    report_id = st.selectbox("Reporte", report_ids)
-    report = registry.get(report_id)
-    if report.description:
-        st.caption(report.description)
-
-    if report.kind == ReportKind.CUSTOM and report.client_id:
-        client_id = report.client_id
-        st.text_input("Cliente", value=client_id, disabled=True)
-        client_params: dict[str, str] = {}
-    else:
-        picked = _company_picker(key="run_client")
-        if picked is None:
-            st.stop()
-        id_company, company_name = picked
-        client_id = slugify(company_name)
-        client_params = {"id_company": id_company} if "id_company" in report.params_schema else {}
-
-    params: dict[str, str] = dict(client_params)
-    params_needing_input = {
-        name: bq_type for name, bq_type in report.params_schema.items() if name not in client_params
-    }
-
-    if client_params:
-        resolved_preview = ", ".join(f"{k}={v}" for k, v in client_params.items())
-        st.caption(f"Resuelto automáticamente desde el catálogo de compañías: {resolved_preview}")
-
-    window_fields = [name for name in _WINDOW_PARAM_NAMES if name in params_needing_input]
-    other_fields = {
-        name: bq_type for name, bq_type in params_needing_input.items() if name not in window_fields
-    }
-
-    if window_fields:
-        st.subheader("Ventana de tiempo")
-        preset_labels = {**WINDOW_PRESETS, _CUSTOM_WINDOW_KEY: "Rango personalizado"}
-        preset = st.selectbox(
-            "Preset",
-            list(preset_labels.keys()),
-            format_func=lambda k: preset_labels[k],
-            key="window_preset",
+        st.warning(
+            "No hay reportes registrados. Creá uno nuevo en la pestaña "
+            "'Crear reporte nuevo'."
         )
-        if preset == _CUSTOM_WINDOW_KEY:
-            col_start, col_end = st.columns(2)
-            with col_start:
-                start = st.date_input("Desde", value=date.today(), key="window_start")
-            with col_end:
-                end = st.date_input("Hasta", value=date.today(), key="window_end")
-            start_iso, end_iso = start.isoformat(), end.isoformat()
+    else:
+        report_id = st.selectbox("Reporte", report_ids)
+        report = registry.get(report_id)
+        if report.description:
+            st.caption(report.description)
+
+        client_params: dict[str, str] = {}
+        client_id: str | None = None
+        if report.kind == ReportKind.CUSTOM and report.client_id:
+            client_id = report.client_id
+            st.text_input("Cliente", value=client_id, disabled=True)
+        elif report.kind == ReportKind.CUSTOM and not report.client_id:
+            client_id = "general"
         else:
-            start_iso, end_iso = resolve_window(preset, date.today())
-            st.caption(f"Resuelto automáticamente: {start_iso} a {end_iso}")
-        for name, value in zip(_WINDOW_PARAM_NAMES, (start_iso, end_iso)):
-            if name in window_fields:
-                params[name] = value
-
-    if other_fields:
-        st.subheader("Parámetros")
-        st.caption("Déjalos vacíos para usar el valor por defecto del reporte (si tiene uno).")
-        for name, bq_type in other_fields.items():
-            default_hint = report.params_defaults.get(name, "")
-            value = st.text_input(
-                f"{name} ({bq_type})",
-                value="",
-                placeholder=f"default: {default_hint}" if default_hint else "requerido",
-                key=f"param_{name}",
-            )
-            if value:
-                params[name] = value
-
-    if st.button("Ejecutar reporte", type="primary"):
-        with st.spinner(f"Corriendo {report_id!r} para {client_id!r} contra BigQuery..."):
-            executor = BigQueryExecutor(bigquery.Client(project=settings.gcp_project))
-            output_dir = Path("/tmp/reporting_automation_ui") / client_id
-            result = run_report(
-                report_id=report_id,
-                client_id=client_id,
-                params=params,
-                output_dir=output_dir,
-                registry=registry,
-                executor=executor,
-            )
-
-        if result.status == "failure":
-            st.error(f"Error ejecutando {report_id!r}: {result.error}")
-        else:
-            st.success(f"OK: {result.rows} filas x {result.columns} columnas")
-            for rendered in result.rendered_files:
-                st.download_button(
-                    label=f"Descargar {rendered.filename}",
-                    data=rendered.local_path.read_bytes(),
-                    file_name=rendered.filename,
-                    key=f"download_{rendered.filename}",
+            picked = _company_picker(key="run_client")
+            if picked is not None:
+                id_company, company_name = picked
+                client_id = slugify(company_name)
+                client_params = (
+                    {"id_company": id_company} if "id_company" in report.params_schema else {}
                 )
+
+        if client_id is not None:
+            params: dict[str, str] = dict(client_params)
+            params_needing_input = {
+                name: bq_type
+                for name, bq_type in report.params_schema.items()
+                if name not in client_params
+            }
+
+            if client_params:
+                resolved_preview = ", ".join(f"{k}={v}" for k, v in client_params.items())
+                st.caption(
+                    f"Resuelto automáticamente desde el catálogo de compañías: {resolved_preview}"
+                )
+
+            window_fields = [name for name in _WINDOW_PARAM_NAMES if name in params_needing_input]
+            other_fields = {
+                name: bq_type
+                for name, bq_type in params_needing_input.items()
+                if name not in window_fields
+            }
+
+            if window_fields:
+                st.subheader("Ventana de tiempo")
+                preset_labels = {**WINDOW_PRESETS, _CUSTOM_WINDOW_KEY: "Rango personalizado"}
+                preset = st.selectbox(
+                    "Preset",
+                    list(preset_labels.keys()),
+                    format_func=lambda k: preset_labels[k],
+                    key="window_preset",
+                )
+                if preset == _CUSTOM_WINDOW_KEY:
+                    col_start, col_end = st.columns(2)
+                    with col_start:
+                        start = st.date_input("Desde", value=date.today(), key="window_start")
+                    with col_end:
+                        end = st.date_input("Hasta", value=date.today(), key="window_end")
+                    start_iso, end_iso = start.isoformat(), end.isoformat()
+                else:
+                    start_iso, end_iso = resolve_window(preset, date.today())
+                    st.caption(f"Resuelto automáticamente: {start_iso} a {end_iso}")
+                for name, value in zip(_WINDOW_PARAM_NAMES, (start_iso, end_iso)):
+                    if name in window_fields:
+                        params[name] = value
+
+            if other_fields:
+                st.subheader("Parámetros")
+                st.caption("Déjalos vacíos para usar el valor por defecto del reporte (si tiene uno).")
+                for name, bq_type in other_fields.items():
+                    default_hint = report.params_defaults.get(name, "")
+                    value = st.text_input(
+                        f"{name} ({bq_type})",
+                        value="",
+                        placeholder=f"default: {default_hint}" if default_hint else "requerido",
+                        key=f"param_{name}",
+                    )
+                    if value:
+                        params[name] = value
+
+            if st.button("Ejecutar reporte", type="primary"):
+                with st.spinner(f"Corriendo {report_id!r} para {client_id!r} contra BigQuery..."):
+                    executor = BigQueryExecutor(bigquery.Client(project=settings.gcp_project))
+                    output_dir = Path("/tmp/reporting_automation_ui") / client_id
+                    result = run_report(
+                        report_id=report_id,
+                        client_id=client_id,
+                        params=params,
+                        output_dir=output_dir,
+                        registry=registry,
+                        executor=executor,
+                    )
+
+                if result.status == "failure":
+                    st.error(f"Error ejecutando {report_id!r}: {result.error}")
+                else:
+                    st.success(f"OK: {result.rows} filas x {result.columns} columnas")
+                    for rendered in result.rendered_files:
+                        st.download_button(
+                            label=f"Descargar {rendered.filename}",
+                            data=rendered.local_path.read_bytes(),
+                            file_name=rendered.filename,
+                            key=f"download_{rendered.filename}",
+                        )
 
 with tab_new:
     st.subheader("Crear reporte nuevo")
@@ -181,26 +194,44 @@ with tab_new:
         "La SQL se guarda tal cual la pegues -- no se valida ni se modifica."
     )
 
-    new_id = st.text_input("ID del reporte", key="wizard_id")
     new_name = st.text_input("Nombre", key="wizard_name")
+    new_id = slugify(new_name) if new_name else ""
+    st.text_input("ID del reporte (autogenerado desde el nombre)", value=new_id, disabled=True)
     new_description = st.text_area("Descripción (opcional)", key="wizard_description")
 
-    scope = st.radio(
-        "Alcance",
-        ["shared", "custom"],
-        format_func=lambda k: (
-            "Reutilizable (cualquier cliente vía id_company)"
-            if k == "shared"
-            else "Específico de un cliente"
+    is_per_company = st.radio(
+        "¿El reporte corresponde a una compañía específica?",
+        [True, False],
+        format_func=lambda v: (
+            "Sí -- necesita un cliente / id_company"
+            if v
+            else "No -- reporte general, sin cliente asociado"
         ),
-        key="wizard_scope",
+        key="wizard_is_per_company",
     )
 
     new_client_id = None
-    if scope == "custom":
-        picked = _company_picker(key="wizard_client")
-        if picked is not None:
-            new_client_id, _wizard_company_name = picked
+    if is_per_company:
+        scope = st.radio(
+            "Alcance",
+            ["shared", "custom"],
+            format_func=lambda k: (
+                "Reutilizable (cualquier cliente vía id_company)"
+                if k == "shared"
+                else "Específico de un cliente"
+            ),
+            key="wizard_scope",
+        )
+        if scope == "custom":
+            picked = _company_picker(key="wizard_client")
+            if picked is not None:
+                new_client_id, _wizard_company_name = picked
+    else:
+        scope = "custom"
+        st.caption(
+            "Se guarda como reporte 'custom' sin cliente asociado -- no se pide "
+            "compañía ni se inyecta id_company."
+        )
 
     uses_time_window = st.checkbox(
         "Este reporte usa una ventana de tiempo variable (start_date/end_date)",
@@ -234,13 +265,13 @@ with tab_new:
 
     if st.button("Guardar como plantilla", type="primary"):
         try:
-            if not new_id or not new_name:
-                raise ValueError("ID y Nombre son obligatorios.")
+            if not new_name:
+                raise ValueError("El nombre es obligatorio.")
             if not sql_text.strip():
                 raise ValueError("La SQL no puede estar vacía.")
             if not output_formats_raw:
                 raise ValueError("Elegí al menos un formato de salida.")
-            if scope == "custom" and not new_client_id:
+            if is_per_company and scope == "custom" and not new_client_id:
                 raise ValueError("Elegí una compañía para un reporte específico de un cliente.")
 
             form = WizardInput(
@@ -262,3 +293,37 @@ with tab_new:
             st.success(f"Reporte {new_id!r} creado: {yaml_path.name} + {sql_path.name}")
             _load_registries.clear()
             st.rerun()
+
+    st.divider()
+    st.subheader("Eliminar reporte existente")
+    st.caption("Borra el YAML + SQL de un reporte ya cargado. No se puede deshacer desde la UI.")
+
+    existing_ids = sorted(r.id for r in registry.list_all())
+    if not existing_ids:
+        st.caption("No hay reportes cargados.")
+    else:
+        delete_id = st.selectbox("Reporte a eliminar", existing_ids, key="wizard_delete_id")
+        report_to_delete = registry.get(delete_id)
+        st.caption(
+            f"{report_to_delete.kind.value} -- {report_to_delete.description or 'sin descripción'}"
+        )
+        confirm_id = st.text_input(
+            f"Escribí «{delete_id}» para confirmar el borrado",
+            key="wizard_delete_confirm",
+        )
+        if st.button(
+            "Eliminar reporte",
+            type="secondary",
+            disabled=confirm_id != delete_id,
+            key="wizard_delete_button",
+        ):
+            try:
+                yaml_path, sql_path = delete_existing_report(
+                    Path(settings.reports_dir), report_to_delete
+                )
+            except ReportConfigError as exc:
+                st.error(str(exc))
+            else:
+                st.success(f"Reporte {delete_id!r} eliminado: {yaml_path.name} + {sql_path.name}")
+                _load_registries.clear()
+                st.rerun()

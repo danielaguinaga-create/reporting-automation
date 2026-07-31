@@ -1,0 +1,21 @@
+id: usuarios_por_compania_y_tipo
+name: UsuariosPorCompaniaYTipo
+kind: custom
+client_id: portfolio_multi_cliente
+sql_file: usuarios_por_compania_y_tipo.sql
+output_formats:
+- csv
+default_recipients: []
+delivery_channels: []
+params_schema:
+  start_date: DATE
+  end_date: DATE
+  company_names: STRING
+params_defaults:
+  company_names: Asefi,Avanza Seguros,Bloss Med,CESVI,Clínicas del Hombre,Cobee,Doctor
+    Any Time,Delihealths,Geckontigo,Grupo Mexicano de Hospitales,Lluvia,Meeting-doctors,MediPro,NestleMexico,Nexter,PepsiCo,Protec,Reina
+    Madre,Trendit,U Health,Ve por Más,Welbe,Salud en línea,ZURII,Starlight
+filename_pattern: '{year}{month}_MD_{company}_{report_name}'
+description: 'Usuarios activos/inactivos por compañía y tipo de usuario, para una
+  lista configurable de compañías (default: portfolio original de 25) y un mes configurable
+  (default: mes anterior).'

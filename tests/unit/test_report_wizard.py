@@ -5,6 +5,7 @@ from reporting_automation.exceptions import ReportConfigError
 from reporting_automation.report_wizard import (
     WizardInput,
     build_report_config,
+    delete_existing_report,
     parse_param_declarations_block,
     save_new_report,
 )
@@ -98,3 +99,22 @@ def test_save_new_report_raises_if_id_already_exists(tmp_path):
 
     with pytest.raises(ReportConfigError):
         save_new_report(tmp_path, _form())
+
+
+def test_delete_existing_report_removes_files(tmp_path):
+    yaml_path, sql_path = save_new_report(tmp_path, _form())
+    report = build_report_config(_form())
+
+    deleted_yaml, deleted_sql = delete_existing_report(tmp_path, report)
+
+    assert deleted_yaml == yaml_path
+    assert deleted_sql == sql_path
+    assert not yaml_path.exists()
+    assert not sql_path.exists()
+
+
+def test_delete_existing_report_raises_if_missing(tmp_path):
+    report = build_report_config(_form())
+
+    with pytest.raises(ReportConfigError, match="No existe"):
+        delete_existing_report(tmp_path, report)

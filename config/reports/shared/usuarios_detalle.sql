@@ -1,12 +1,11 @@
 SELECT
-    idUserMD                AS UserID,
+    idUserMD                        AS UserID,
     UserHash,
     UserToken,
-    idCompany                AS ApiKey,
     UserFirstName,
     UserLastName,
     UserEmail,
-    UserAge,
+    UserBirthdate,
     UserPhoneNumber,
     UserGenderNum,
     UserContractNumber,
@@ -16,16 +15,12 @@ SELECT
     UserCompanyGroupCode,
     UserType,
     UserStatus,
-    UserBanned,
-    UserBannedAtUTC,
-    UserInvitationCode,
-    UserFirstAccessedAtUTC,
-    UserSubscribedAtUTC,
-    UserUnsubscribedAtUTC,
-    UserAdditionalData,
-    UserUninstalledAtUTC,
-    UserDateAtUTC,
-    UserUpdatedAtUTC
+    UserInvitationBy,
+    CAST(UserFirstAccessedAtUTC AS STRING)  AS UserFirstAccessedAtUTC,
+    CAST(UserSubscribedAtUTC AS STRING)     AS UserSubscribedAtUTC,
+    CAST(UserUnsubscribedAtUTC AS STRING)   AS UserUnsubscribedAtUTC,
+    CAST(UserUninstalledAtUTC AS STRING)    AS UserUninstalledAtUTC
 FROM `data-prd-424213.03_BaseModel.DimUsers`
 WHERE idCompany = @id_company
-ORDER BY UserSubscribedAtUTC ASC;
+AND DATE_TRUNC(DATE(UserFirstAccessedAtUTC), MONTH)
+    <= DATE_TRUNC(@target_month_date, MONTH);
