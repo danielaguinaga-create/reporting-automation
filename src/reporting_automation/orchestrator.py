@@ -5,6 +5,8 @@ from datetime import date
 from pathlib import Path
 from typing import Any, Literal
 
+import pandas as pd
+
 from reporting_automation.config.client_registry import ClientRegistry
 from reporting_automation.config.registry import ReportRegistry
 from reporting_automation.query.bigquery_client import BigQueryExecutor
@@ -23,6 +25,10 @@ _PREVIOUS_MONTH_FIRST_DAY = "previous_month_first_day"
 # en `time_window.py`) cuando un reporte los declara en `params_schema`.
 _WINDOW_PARAM_NAMES = ("start_date", "end_date")
 
+# Cuantas filas del resultado se devuelven en `ReportRunResult.preview` -- solo
+# para mostrar un adelanto en la UI, no reemplaza los archivos renderizados.
+_PREVIEW_ROW_LIMIT = 20
+
 
 @dataclass(frozen=True)
 class ReportRunResult:
@@ -33,6 +39,7 @@ class ReportRunResult:
     columns: int | None = None
     rendered_files: list[RenderedFile] = field(default_factory=list)
     error: str | None = None
+    preview: pd.DataFrame | None = None
 
 
 def resolve_params(
@@ -154,6 +161,7 @@ def run_report(
             rows=df.shape[0],
             columns=df.shape[1],
             rendered_files=rendered_files,
+            preview=df.head(_PREVIEW_ROW_LIMIT),
         )
     except Exception as exc:  # noqa: BLE001 - se reporta al caller, no se traga
         return ReportRunResult(

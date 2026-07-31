@@ -186,6 +186,11 @@ with tab_run:
                             file_name=rendered.filename,
                             key=f"download_{rendered.filename}",
                         )
+                    if result.preview is not None:
+                        st.caption(
+                            f"Vista previa (primeras {len(result.preview)} de {result.rows} filas)"
+                        )
+                        st.dataframe(result.preview)
 
 with tab_new:
     st.subheader("Crear reporte nuevo")

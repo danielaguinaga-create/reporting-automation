@@ -60,6 +60,8 @@ def test_running_a_report_shows_success_and_download_button(monkeypatch):
     assert not at.exception
     assert len(at.success) == 1
     assert len(at.download_button) >= 1
+    assert len(at.dataframe) == 1
+    assert at.dataframe[0].value["dummy_col"].tolist() == [1, 2, 3]
 
 
 def test_shared_report_client_picker_comes_from_bigquery_not_yaml(monkeypatch):

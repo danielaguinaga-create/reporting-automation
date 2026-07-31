@@ -57,6 +57,41 @@ def test_run_report_success_renders_all_formats(tmp_path, registry):
         assert f.local_path.is_file()
 
     assert executor.last_call["params"] == {"billing_month_date": "2026-05-01"}
+    pd.testing.assert_frame_equal(result.preview, df)
+
+
+def test_run_report_preview_is_capped_at_20_rows(tmp_path, registry):
+    df = pd.DataFrame({"dummy_col": range(30)})
+    executor = FakeExecutor(df)
+
+    result = run_report(
+        report_id="simple_report",
+        client_id="acme",
+        params={},
+        output_dir=tmp_path,
+        registry=registry,
+        executor=executor,
+        run_date=date(2026, 3, 1),
+    )
+
+    assert result.rows == 30
+    assert len(result.preview) == 20
+    pd.testing.assert_frame_equal(result.preview, df.head(20))
+
+
+def test_run_report_failure_has_no_preview(tmp_path, registry):
+    executor = FakeExecutor(pd.DataFrame())
+
+    result = run_report(
+        report_id="does_not_exist",
+        client_id="acme",
+        params={},
+        output_dir=tmp_path,
+        registry=registry,
+        executor=executor,
+    )
+
+    assert result.preview is None
 
 
 def test_run_report_applies_previous_month_default_when_param_missing(tmp_path, registry):

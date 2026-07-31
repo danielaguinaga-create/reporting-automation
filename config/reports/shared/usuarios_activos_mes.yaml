@@ -1,0 +1,15 @@
+id: usuarios_activos_mes
+name: Usuarios Activos Mes
+kind: shared
+sql_file: usuarios_activos_mes.sql
+output_formats:
+- csv
+default_recipients: []
+delivery_channels: []
+params_schema:
+  id_company: STRING
+  start_date: DATE
+  end_date: DATE
+params_defaults: {}
+filename_pattern: '{year}{month}_MD_{company}_{report_name}'
+description: Usuarios con altas/bajas/activos en el mes, para cualquier cliente via id_company.
