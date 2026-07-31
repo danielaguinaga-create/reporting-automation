@@ -66,6 +66,16 @@ def test_build_report_config_with_time_window_adds_start_end_date():
     }
 
 
+def test_build_report_config_shared_kind_auto_injects_id_company_when_not_declared():
+    report = build_report_config(_form(param_declarations=""))
+    assert report.params_schema == {"id_company": "STRING"}
+
+
+def test_build_report_config_shared_kind_keeps_explicit_id_company_type():
+    report = build_report_config(_form(param_declarations="id_company:INT64"))
+    assert report.params_schema == {"id_company": "INT64"}
+
+
 def test_build_report_config_custom_kind_keeps_client_id():
     report = build_report_config(
         _form(kind=ReportKind.CUSTOM, client_id="abc123hash", param_declarations="")

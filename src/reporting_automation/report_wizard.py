@@ -12,6 +12,11 @@ from reporting_automation.query.bigquery_client import parse_param_declaration
 # de ventana de tiempo automaticamente al correrlo.
 _WINDOW_PARAMS = {"start_date": "DATE", "end_date": "DATE"}
 
+# Un reporte `shared` corre para cualquier cliente via `@id_company` (ver
+# CLAUDE.md) -- sin declararlo en `params_schema`, la UI nunca lo bindea y
+# BigQuery falla en runtime con "Query parameter 'id_company' not found".
+_CLIENT_PARAM = {"id_company": "STRING"}
+
 
 @dataclass(frozen=True)
 class WizardInput:
@@ -45,6 +50,8 @@ def parse_param_declarations_block(text: str) -> dict[str, str]:
 
 def build_report_config(form: WizardInput) -> ReportConfig:
     params_schema = parse_param_declarations_block(form.param_declarations)
+    if form.kind == ReportKind.SHARED:
+        params_schema = {**_CLIENT_PARAM, **params_schema}
     if form.uses_time_window:
         params_schema = {**params_schema, **_WINDOW_PARAMS}
 
