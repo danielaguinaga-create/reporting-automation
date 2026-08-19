@@ -101,7 +101,7 @@ with tab_run:
     report_ids = sorted(r.id for r in registry.list_all())
     if not report_ids:
         st.warning(
-            "No hay reportes registrados. Creá uno nuevo en la pestaña "
+            "No hay reportes registrados. Crea uno nuevo en la pestaña "
             "'Crear reporte nuevo'."
         )
     else:
@@ -267,7 +267,7 @@ with tab_new:
     param_declarations = st.text_area(
         "Variables adicionales (una por línea, formato nombre:TIPO_BQ)",
         help="Tipos válidos: STRING, INT64, FLOAT64, BOOL, DATE, DATETIME, TIMESTAMP. "
-        "No hace falta declarar start_date/end_date acá si tildaste la ventana de tiempo arriba.",
+        "No hace falta declarar start_date/end_date aquí si activaste la ventana de tiempo arriba.",
         key="wizard_params",
     )
     sql_text = st.text_area(
@@ -297,9 +297,9 @@ with tab_new:
             if not sql_text.strip():
                 raise ValueError("La SQL no puede estar vacía.")
             if not output_formats_raw:
-                raise ValueError("Elegí al menos un formato de salida.")
+                raise ValueError("Elige al menos un formato de salida.")
             if is_per_company and scope == "custom" and not new_client_id:
-                raise ValueError("Elegí una compañía para un reporte específico de un cliente.")
+                raise ValueError("Elige una compañía para un reporte específico de un cliente.")
 
             form = WizardInput(
                 id=new_id,
@@ -335,7 +335,7 @@ with tab_new:
             f"{report_to_delete.kind.value} -- {report_to_delete.description or 'sin descripción'}"
         )
         confirm_id = st.text_input(
-            f"Escribí «{delete_id}» para confirmar el borrado",
+            f"Escribe «{delete_id}» para confirmar el borrado",
             key="wizard_delete_confirm",
         )
         if st.button(
@@ -423,7 +423,7 @@ with tab_schedule:
             try:
                 cron = custom_cron.strip() if freq_choice == _CUSTOM_WINDOW_KEY else freq_choice
                 if not cron:
-                    raise ValueError("Ingresá una expresión cron válida.")
+                    raise ValueError("Ingresa una expresión cron válida.")
                 new_entry = BatchEntry(
                     report=schedule_report_id, client=schedule_client_id, schedule=cron
                 )
@@ -447,7 +447,7 @@ with tab_schedule:
                     project=settings.gcp_project,
                 )
                 st.caption(
-                    "Corré esto (con permisos de IAM) cuando Fase 3 esté desplegada, para "
+                    "Corre esto (con permisos de IAM) cuando Fase 3 esté desplegada, para "
                     "activar esta programación de verdad:"
                 )
                 st.code(command, language="bash")
