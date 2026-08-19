@@ -3,7 +3,13 @@ from datetime import date
 import pandas as pd
 import pytest
 
-from reporting_automation.batch import BatchEntry, load_batch_manifest, run_batch
+from reporting_automation.batch import (
+    BatchEntry,
+    build_scheduler_job_command,
+    load_batch_manifest,
+    run_batch,
+    save_batch_manifest,
+)
 from reporting_automation.config.registry import ReportRegistry
 
 
@@ -89,6 +95,74 @@ def test_run_batch_writes_each_client_to_its_own_subdir_no_collision(tmp_path, r
     )
     assert results[0].rendered_files[0].local_path.is_file()
     assert results[1].rendered_files[0].local_path.is_file()
+
+
+def test_save_batch_manifest_round_trips_entries(tmp_path):
+    manifest_path = tmp_path / "batch.yaml"
+    entries = [
+        BatchEntry(report="simple_report", client="acme"),
+        BatchEntry(report="windowed_report", client="acme", window="previous_month", schedule="0 6 1 * *"),
+    ]
+
+    save_batch_manifest(manifest_path, entries)
+
+    assert load_batch_manifest(manifest_path) == entries
+
+
+def test_save_batch_manifest_preserves_leading_comment_header(tmp_path):
+    manifest_path = tmp_path / "batch.yaml"
+    manifest_path.write_text(
+        "# Manifiesto de la corrida mensual.\n# Segunda linea de comentario.\n\n"
+        "- report: simple_report\n  client: acme\n"
+    )
+
+    save_batch_manifest(manifest_path, [BatchEntry(report="simple_report", client="otro")])
+
+    content = manifest_path.read_text()
+    assert content.startswith(
+        "# Manifiesto de la corrida mensual.\n# Segunda linea de comentario.\n\n"
+    )
+    assert load_batch_manifest(manifest_path) == [BatchEntry(report="simple_report", client="otro")]
+
+
+def test_save_batch_manifest_empty_list_writes_empty_yaml_list(tmp_path):
+    manifest_path = tmp_path / "batch.yaml"
+
+    save_batch_manifest(manifest_path, [])
+
+    assert load_batch_manifest(manifest_path) == []
+
+
+def test_build_scheduler_job_command_uses_default_schedule_when_entry_has_none():
+    entry = BatchEntry(report="chats_detalle", client="protec")
+
+    command = build_scheduler_job_command(
+        entry,
+        topic_path="projects/proj/topics/triggers",
+        location="europe-southwest1",
+        default_schedule="0 6 1 * *",
+        timezone="Europe/Madrid",
+        project="proj",
+    )
+
+    assert "chats_detalle_protec" in command
+    assert "--schedule='0 6 1 * *'" in command
+    assert "--project=proj" in command
+
+
+def test_build_scheduler_job_command_prefers_entry_schedule_over_default():
+    entry = BatchEntry(report="chats_detalle", client="protec", schedule="0 8 * * 1")
+
+    command = build_scheduler_job_command(
+        entry,
+        topic_path="projects/proj/topics/triggers",
+        location="europe-southwest1",
+        default_schedule="0 6 1 * *",
+        timezone="Europe/Madrid",
+        project="proj",
+    )
+
+    assert "--schedule='0 8 * * 1'" in command
 
 
 def test_run_batch_threads_window_to_run_report(tmp_path, registry):

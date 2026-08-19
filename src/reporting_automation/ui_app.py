@@ -10,8 +10,15 @@ import streamlit as st
 from google.cloud import bigquery
 from pydantic import ValidationError
 
+from reporting_automation.batch import (
+    BatchEntry,
+    build_scheduler_job_command,
+    load_batch_manifest,
+    save_batch_manifest,
+)
 from reporting_automation.company_catalog import fetch_active_companies
 from reporting_automation.config.client_import import slugify
+from reporting_automation.config.client_registry import ClientRegistry
 from reporting_automation.config.loader import load_settings
 from reporting_automation.config.models import OutputFormat, ReportKind
 from reporting_automation.config.registry import ReportRegistry
@@ -25,6 +32,17 @@ from reporting_automation.time_window import WINDOW_PRESETS, resolve_window
 _WINDOW_PARAM_NAMES = ("start_date", "end_date")
 _CUSTOM_WINDOW_KEY = "custom"
 
+_BATCH_MANIFEST_PATH = Path("config/monthly_batch.yaml")
+
+# Presets de frecuencia para la pestaña "Programar reportes" -- cron en
+# formato `gcloud scheduler` (ver `batch.build_scheduler_job_command`).
+_SCHEDULE_PRESETS: dict[str, str] = {
+    "0 6 * * *": "Diario (todos los dias, 6am)",
+    "0 6 * * 1": "Semanal (lunes, 6am)",
+    "0 6 1 * *": "Mensual (dia 1, 6am)",
+    _CUSTOM_WINDOW_KEY: "Personalizado (cron manual)",
+}
+
 st.set_page_config(page_title="Reporting Automation", page_icon="📊")
 
 
@@ -33,10 +51,12 @@ def _load_registries():
     settings = load_settings()
     registry = ReportRegistry()
     registry.load(settings.reports_dir)
-    return settings, registry
+    client_registry = ClientRegistry()
+    client_registry.load(settings.clients_dir)
+    return settings, registry, client_registry
 
 
-settings, registry = _load_registries()
+settings, registry, client_registry = _load_registries()
 
 
 @st.cache_data(ttl=300, show_spinner="Cargando catálogo de compañías...")
@@ -73,7 +93,9 @@ st.caption(
     "No manda correos ni sube a Drive -- eso sigue siendo solo desde la CLI (`run --deliver`)."
 )
 
-tab_run, tab_new = st.tabs(["Correr un reporte", "Crear reporte nuevo"])
+tab_run, tab_new, tab_schedule = st.tabs(
+    ["Correr un reporte", "Crear reporte nuevo", "Programar reportes"]
+)
 
 with tab_run:
     report_ids = sorted(r.id for r in registry.list_all())
@@ -332,3 +354,100 @@ with tab_new:
                 st.success(f"Reporte {delete_id!r} eliminado: {yaml_path.name} + {sql_path.name}")
                 _load_registries.clear()
                 st.rerun()
+
+with tab_schedule:
+    st.subheader("Programar reportes")
+    st.caption(
+        "Define que reporte corre para que cliente y con que frecuencia. Esto guarda la "
+        "programacion en config/monthly_batch.yaml, pero **no ejecuta nada automaticamente "
+        "todavia**: Cloud Scheduler -> Pub/Sub -> Cloud Run (Fase 3) esta escrito pero no "
+        "desplegado (falta acceso IAM, ver README). El comando `gcloud` que aparece abajo es "
+        "el que activaria esta programacion de verdad cuando eso se despliegue."
+    )
+
+    batch_entries = (
+        load_batch_manifest(_BATCH_MANIFEST_PATH) if _BATCH_MANIFEST_PATH.is_file() else []
+    )
+
+    st.markdown("**Reportes programados**")
+    if not batch_entries:
+        st.caption("No hay reportes programados todavía.")
+    else:
+        for i, entry in enumerate(batch_entries):
+            freq_label = _SCHEDULE_PRESETS.get(entry.schedule, entry.schedule)
+            freq_text = freq_label or "Mensual (default de generate-scheduler-jobs, dia 1 6am)"
+            col_info, col_action = st.columns([5, 1])
+            with col_info:
+                st.write(f"**{entry.report}** → {entry.client} — {freq_text}")
+            with col_action:
+                if st.button("Quitar", key=f"remove_schedule_{i}"):
+                    batch_entries.pop(i)
+                    save_batch_manifest(_BATCH_MANIFEST_PATH, batch_entries)
+                    st.rerun()
+
+    st.divider()
+    st.markdown("**Agregar reporte programado**")
+
+    schedule_report_ids = sorted(r.id for r in registry.list_all())
+    schedule_client_ids = sorted(c.id for c in client_registry.list_all())
+
+    if not schedule_report_ids:
+        st.caption("No hay reportes registrados.")
+    elif not schedule_client_ids:
+        st.caption(
+            "No hay clientes registrados en config/clients/. Agrega uno con "
+            "`reporting-automation new-client` desde la CLI primero."
+        )
+    else:
+        schedule_report_id = st.selectbox("Reporte", schedule_report_ids, key="schedule_report_id")
+        schedule_client_id = st.selectbox(
+            "Cliente",
+            schedule_client_ids,
+            format_func=lambda cid: f"{cid} ({client_registry.get_or_none(cid).display_name})",
+            key="schedule_client_id",
+        )
+        freq_choice = st.selectbox(
+            "Frecuencia",
+            list(_SCHEDULE_PRESETS.keys()),
+            format_func=lambda k: _SCHEDULE_PRESETS[k],
+            key="schedule_freq",
+        )
+        custom_cron = ""
+        if freq_choice == _CUSTOM_WINDOW_KEY:
+            custom_cron = st.text_input(
+                "Cron personalizado (formato gcloud scheduler, ej. '0 6 1 * *')",
+                key="schedule_custom_cron",
+            )
+
+        if st.button("Agregar a la programación", type="primary"):
+            try:
+                cron = custom_cron.strip() if freq_choice == _CUSTOM_WINDOW_KEY else freq_choice
+                if not cron:
+                    raise ValueError("Ingresá una expresión cron válida.")
+                new_entry = BatchEntry(
+                    report=schedule_report_id, client=schedule_client_id, schedule=cron
+                )
+                batch_entries.append(new_entry)
+                save_batch_manifest(_BATCH_MANIFEST_PATH, batch_entries)
+            except (ValueError, ValidationError) as exc:
+                st.error(str(exc))
+            else:
+                st.success(
+                    f"Agregado: {schedule_report_id!r} → {schedule_client_id!r} "
+                    f"({_SCHEDULE_PRESETS.get(cron, cron)})"
+                )
+                command = build_scheduler_job_command(
+                    new_entry,
+                    topic_path=(
+                        f"projects/{settings.gcp_project}/topics/reporting-automation-triggers"
+                    ),
+                    location="europe-southwest1",
+                    default_schedule="0 6 1 * *",
+                    timezone="Europe/Madrid",
+                    project=settings.gcp_project,
+                )
+                st.caption(
+                    "Corré esto (con permisos de IAM) cuando Fase 3 esté desplegada, para "
+                    "activar esta programación de verdad:"
+                )
+                st.code(command, language="bash")

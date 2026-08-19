@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import json
-import shlex
 from pathlib import Path
 
 import google.auth
@@ -12,7 +10,7 @@ from pydantic import ValidationError
 
 from reporting_automation.ask import AskCancelled, upload_ask_files_to_drive
 from reporting_automation.ask import ask as ask_question
-from reporting_automation.batch import load_batch_manifest, run_batch
+from reporting_automation.batch import build_scheduler_job_command, load_batch_manifest, run_batch
 from reporting_automation.config.client_import import import_clients_from_csv
 from reporting_automation.config.client_registry import ClientRegistry
 from reporting_automation.config.loader import Settings, load_settings
@@ -604,21 +602,13 @@ def generate_scheduler_jobs(
     topic_path = f"projects/{settings.gcp_project}/topics/{topic}"
 
     for entry in entries:
-        job_id = f"{entry.report}_{entry.client}"
-        message_body = json.dumps(
-            {
-                "reporte": entry.report,
-                "cliente": entry.client,
-                "receptores": entry.recipients,
-                "params": entry.params,
-            }
-        )
-        command = (
-            f"gcloud scheduler jobs create pubsub {job_id} "
-            f"--location={location} --schedule={shlex.quote(schedule)} "
-            f"--topic={topic_path} --time-zone={shlex.quote(timezone)} "
-            f"--message-body={shlex.quote(message_body)} "
-            f"--project={settings.gcp_project}"
+        command = build_scheduler_job_command(
+            entry,
+            topic_path=topic_path,
+            location=location,
+            default_schedule=schedule,
+            timezone=timezone,
+            project=settings.gcp_project,
         )
         typer.echo(command)
 

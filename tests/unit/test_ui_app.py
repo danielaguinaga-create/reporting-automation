@@ -157,7 +157,7 @@ def test_wizard_tab_renders_all_fields(monkeypatch):
     at.run()
 
     assert not at.exception
-    assert len(at.tabs) == 2
+    assert len(at.tabs) == 3
     assert len(at.text_area) >= 3  # descripcion, variables, sql
     assert len(at.checkbox) >= 1
     assert len(at.multiselect) >= 1
@@ -327,3 +327,100 @@ def test_wizard_custom_scope_uses_bigquery_company_picker(monkeypatch):
     assert not at.exception
     wizard_client_selectbox = at.selectbox(key="wizard_client")
     assert set(wizard_client_selectbox.options) == {"Protec", "Avanza Seguros"}
+
+
+def test_schedule_tab_lists_existing_manifest_entries(monkeypatch):
+    monkeypatch.setattr("google.cloud.bigquery.Client", FakeBigQueryClient)
+    from reporting_automation.batch import BatchEntry
+
+    monkeypatch.setattr(
+        "reporting_automation.batch.load_batch_manifest",
+        lambda path: [BatchEntry(report="chats_detalle", client="protec", schedule="0 6 1 * *")],
+    )
+
+    at = AppTest.from_file(APP_PATH)
+    at.run()
+
+    assert not at.exception
+    schedule_tab_text = " ".join(w.value for w in at.markdown)
+    assert "chats_detalle" in schedule_tab_text
+    assert "protec" in schedule_tab_text
+
+
+def test_schedule_tab_add_entry_saves_manifest_and_shows_gcloud_command(monkeypatch):
+    monkeypatch.setattr("google.cloud.bigquery.Client", FakeBigQueryClient)
+
+    monkeypatch.setattr("reporting_automation.batch.load_batch_manifest", lambda path: [])
+    saved = []
+    monkeypatch.setattr(
+        "reporting_automation.batch.save_batch_manifest",
+        lambda path, entries: saved.append(list(entries)),
+    )
+
+    at = AppTest.from_file(APP_PATH)
+    at.run()
+
+    at.selectbox(key="schedule_report_id").select("chats_detalle").run()
+    at.selectbox(key="schedule_client_id").select("protec").run()
+    at.selectbox(key="schedule_freq").select("0 6 * * *").run()
+
+    add_button = next(b for b in at.button if b.label == "Agregar a la programación")
+    add_button.click().run()
+
+    assert not at.exception
+    assert len(saved) == 1
+    assert saved[0][0].report == "chats_detalle"
+    assert saved[0][0].client == "protec"
+    assert saved[0][0].schedule == "0 6 * * *"
+    assert len(at.success) == 1
+    assert len(at.code) == 1
+    assert "chats_detalle_protec" in at.code[0].value
+
+
+def test_schedule_tab_custom_cron_is_used_when_frequency_is_personalizado(monkeypatch):
+    monkeypatch.setattr("google.cloud.bigquery.Client", FakeBigQueryClient)
+
+    monkeypatch.setattr("reporting_automation.batch.load_batch_manifest", lambda path: [])
+    saved = []
+    monkeypatch.setattr(
+        "reporting_automation.batch.save_batch_manifest",
+        lambda path, entries: saved.append(list(entries)),
+    )
+
+    at = AppTest.from_file(APP_PATH)
+    at.run()
+
+    at.selectbox(key="schedule_report_id").select("chats_detalle").run()
+    at.selectbox(key="schedule_client_id").select("protec").run()
+    at.selectbox(key="schedule_freq").select("custom").run()
+    at.text_input(key="schedule_custom_cron").set_value("15 3 * * 2").run()
+
+    add_button = next(b for b in at.button if b.label == "Agregar a la programación")
+    add_button.click().run()
+
+    assert not at.exception
+    assert saved[0][0].schedule == "15 3 * * 2"
+
+
+def test_schedule_tab_remove_button_calls_save_with_entry_removed(monkeypatch):
+    monkeypatch.setattr("google.cloud.bigquery.Client", FakeBigQueryClient)
+    from reporting_automation.batch import BatchEntry
+
+    monkeypatch.setattr(
+        "reporting_automation.batch.load_batch_manifest",
+        lambda path: [BatchEntry(report="chats_detalle", client="protec")],
+    )
+    saved = []
+    monkeypatch.setattr(
+        "reporting_automation.batch.save_batch_manifest",
+        lambda path, entries: saved.append(list(entries)),
+    )
+
+    at = AppTest.from_file(APP_PATH)
+    at.run()
+
+    remove_button = next(b for b in at.button if b.label == "Quitar")
+    remove_button.click().run()
+
+    assert not at.exception
+    assert saved == [[]]

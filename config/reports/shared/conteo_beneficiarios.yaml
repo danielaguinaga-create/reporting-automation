@@ -1,0 +1,12 @@
+id: conteo_beneficiarios
+name: Conteo Beneficiarios
+kind: shared
+sql_file: conteo_beneficiarios.sql
+output_formats:
+- csv
+default_recipients: []
+delivery_channels: []
+params_schema:
+  id_company: STRING
+params_defaults: {}
+filename_pattern: '{year}{month}_MD_{company}_{report_name}'
