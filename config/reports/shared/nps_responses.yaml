@@ -1,0 +1,12 @@
+id: nps_responses
+name: NpsResponses
+kind: shared
+sql_file: nps_responses.sql
+output_formats:
+- csv
+default_recipients: []
+params_schema:
+  id_company: STRING
+params_defaults: {}
+filename_pattern: '{year}{month}_MD_{report_name}'
+description: Respuestas de NPS por especialidad para cualquier cliente via --client

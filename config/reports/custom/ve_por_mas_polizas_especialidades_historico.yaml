@@ -1,0 +1,13 @@
+id: ve_por_mas_polizas_especialidades_historico
+name: PolizasEspecialidadesHistorico
+kind: custom
+client_id: ve_por_mas
+sql_file: ve_por_mas_polizas_especialidades_historico.sql
+output_formats:
+- csv
+default_recipients: []
+params_schema: {}
+params_defaults: {}
+filename_pattern: '{year}{month}_MD_{report_name}'
+description: Consultas y especialidades por grupo de contrato (historico, todo el
+  tiempo) para Ve por Mas

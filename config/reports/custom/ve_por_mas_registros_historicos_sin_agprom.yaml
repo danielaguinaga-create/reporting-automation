@@ -1,0 +1,13 @@
+id: ve_por_mas_registros_historicos_sin_agprom
+name: RegistrosHistoricosSinAGPROM
+kind: custom
+client_id: ve_por_mas
+sql_file: ve_por_mas_registros_historicos_sin_agprom.sql
+output_formats:
+- csv
+default_recipients: []
+params_schema: {}
+params_defaults: {}
+filename_pattern: '{year}{month}_MD_{report_name}'
+description: Registros historicos excluyendo tokens AG/PROM y correos @meeting, para
+  Ve por Mas

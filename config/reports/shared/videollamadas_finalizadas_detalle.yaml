@@ -1,0 +1,13 @@
+id: videollamadas_finalizadas_detalle
+name: VideollamadasFinalizadasDetalle
+kind: shared
+sql_file: videollamadas_finalizadas_detalle.sql
+output_formats:
+- csv
+default_recipients: []
+params_schema:
+  id_company: STRING
+params_defaults: {}
+filename_pattern: '{year}{month}_MD_{report_name}'
+description: Detalle de videollamadas finalizadas (token, profesional, especialidad,
+  tiempos) para cualquier cliente via --client

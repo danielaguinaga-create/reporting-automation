@@ -1,0 +1,16 @@
+id: chats_detalle_rango
+name: ChatsDetalleRango
+kind: shared
+sql_file: chats_detalle_rango.sql
+output_formats:
+- csv
+default_recipients: []
+params_schema:
+  id_company: STRING
+  start_date: DATE
+  end_date: DATE
+params_defaults: {}
+filename_pattern: '{year}{month}_MD_{report_name}'
+description: Igual a chats_detalle pero acotado a una ventana de tiempo variable
+  (start_date/end_date) -- ejemplo de referencia para reportes con --window, ver
+  README seccion Ventanas de tiempo.
