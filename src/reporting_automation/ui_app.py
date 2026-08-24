@@ -18,7 +18,6 @@ from reporting_automation.batch import (
 )
 from reporting_automation.company_catalog import fetch_active_companies
 from reporting_automation.config.client_import import slugify
-from reporting_automation.config.client_registry import ClientRegistry
 from reporting_automation.config.loader import load_settings
 from reporting_automation.config.models import OutputFormat, ReportKind
 from reporting_automation.config.registry import ReportRegistry
@@ -68,12 +67,10 @@ def _load_registries():
     settings = load_settings()
     registry = ReportRegistry()
     registry.load(settings.reports_dir)
-    client_registry = ClientRegistry()
-    client_registry.load(settings.clients_dir)
-    return settings, registry, client_registry
+    return settings, registry
 
 
-settings, registry, client_registry = _load_registries()
+settings, registry = _load_registries()
 
 
 @st.cache_data(ttl=300, show_spinner="Cargando catálogo de compañías...")
@@ -804,65 +801,66 @@ with tab_schedule:
     st.markdown("**Agregar reporte programado**")
 
     schedule_report_ids = sorted(r.id for r in registry.list_all())
-    schedule_client_ids = sorted(c.id for c in client_registry.list_all())
 
     if not schedule_report_ids:
         st.caption("No hay reportes registrados.")
-    elif not schedule_client_ids:
-        st.caption(
-            "No hay clientes registrados en config/clients/. Agrega uno con "
-            "`reporting-automation new-client` desde la CLI primero."
-        )
     else:
         schedule_report_id = st.selectbox("Reporte", schedule_report_ids, key="schedule_report_id")
-        schedule_client_id = st.selectbox(
-            "Cliente",
-            schedule_client_ids,
-            format_func=lambda cid: f"{cid} ({client_registry.get_or_none(cid).display_name})",
-            key="schedule_client_id",
-        )
-        freq_choice = st.selectbox(
-            "Frecuencia",
-            list(_SCHEDULE_PRESETS.keys()),
-            format_func=lambda k: _SCHEDULE_PRESETS[k],
-            key="schedule_freq",
-        )
-        custom_cron = ""
-        if freq_choice == _CUSTOM_WINDOW_KEY:
-            custom_cron = st.text_input(
-                "Cron personalizado (formato gcloud scheduler, ej. '0 6 1 * *')",
-                key="schedule_custom_cron",
+        schedule_report = registry.get(schedule_report_id)
+        picked = _company_picker(key="schedule_client")
+        if picked is not None:
+            schedule_id_company, schedule_company_name = picked
+            schedule_client_id = slugify(schedule_company_name)
+            schedule_params = (
+                {"id_company": schedule_id_company}
+                if "id_company" in schedule_report.params_schema
+                else {}
             )
+            freq_choice = st.selectbox(
+                "Frecuencia",
+                list(_SCHEDULE_PRESETS.keys()),
+                format_func=lambda k: _SCHEDULE_PRESETS[k],
+                key="schedule_freq",
+            )
+            custom_cron = ""
+            if freq_choice == _CUSTOM_WINDOW_KEY:
+                custom_cron = st.text_input(
+                    "Cron personalizado (formato gcloud scheduler, ej. '0 6 1 * *')",
+                    key="schedule_custom_cron",
+                )
 
-        if st.button("Agregar a la programación", type="primary"):
-            try:
-                cron = custom_cron.strip() if freq_choice == _CUSTOM_WINDOW_KEY else freq_choice
-                if not cron:
-                    raise ValueError("Ingresa una expresión cron válida.")
-                new_entry = BatchEntry(
-                    report=schedule_report_id, client=schedule_client_id, schedule=cron
-                )
-                batch_entries.append(new_entry)
-                save_batch_manifest(_BATCH_MANIFEST_PATH, batch_entries)
-            except (ValueError, ValidationError) as exc:
-                st.error(str(exc))
-            else:
-                st.success(
-                    f"Agregado: {schedule_report_id!r} → {schedule_client_id!r} "
-                    f"({_SCHEDULE_PRESETS.get(cron, cron)})"
-                )
-                command = build_scheduler_job_command(
-                    new_entry,
-                    topic_path=(
-                        f"projects/{settings.gcp_project}/topics/reporting-automation-triggers"
-                    ),
-                    location="europe-southwest1",
-                    default_schedule="0 6 1 * *",
-                    timezone="Europe/Madrid",
-                    project=settings.gcp_project,
-                )
-                st.caption(
-                    "Corre esto (con permisos de IAM) cuando Fase 3 esté desplegada, para "
-                    "activar esta programación de verdad:"
-                )
-                st.code(command, language="bash")
+            if st.button("Agregar a la programación", type="primary"):
+                try:
+                    cron = custom_cron.strip() if freq_choice == _CUSTOM_WINDOW_KEY else freq_choice
+                    if not cron:
+                        raise ValueError("Ingresa una expresión cron válida.")
+                    new_entry = BatchEntry(
+                        report=schedule_report_id,
+                        client=schedule_client_id,
+                        params=schedule_params,
+                        schedule=cron,
+                    )
+                    batch_entries.append(new_entry)
+                    save_batch_manifest(_BATCH_MANIFEST_PATH, batch_entries)
+                except (ValueError, ValidationError) as exc:
+                    st.error(str(exc))
+                else:
+                    st.success(
+                        f"Agregado: {schedule_report_id!r} → {schedule_client_id!r} "
+                        f"({_SCHEDULE_PRESETS.get(cron, cron)})"
+                    )
+                    command = build_scheduler_job_command(
+                        new_entry,
+                        topic_path=(
+                            f"projects/{settings.gcp_project}/topics/reporting-automation-triggers"
+                        ),
+                        location="europe-southwest1",
+                        default_schedule="0 6 1 * *",
+                        timezone="Europe/Madrid",
+                        project=settings.gcp_project,
+                    )
+                    st.caption(
+                        "Corre esto (con permisos de IAM) cuando Fase 3 esté desplegada, para "
+                        "activar esta programación de verdad:"
+                    )
+                    st.code(command, language="bash")
