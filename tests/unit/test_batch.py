@@ -165,6 +165,24 @@ def test_build_scheduler_job_command_prefers_entry_schedule_over_default():
     assert "--schedule='0 8 * * 1'" in command
 
 
+def test_build_scheduler_job_command_includes_window_in_message_body():
+    """El scheduler dispara Pub/Sub -> Cloud Run (Fase 3, ver main_entrypoint.py)
+    -- sin esto, un reporte programado con ventana de tiempo perdia el preset
+    al pasar por Cloud Scheduler, aunque run_batch (CLI) si lo resolviera bien."""
+    entry = BatchEntry(report="windowed_report", client="acme", window="last_7_days")
+
+    command = build_scheduler_job_command(
+        entry,
+        topic_path="projects/proj/topics/triggers",
+        location="europe-southwest1",
+        default_schedule="0 6 1 * *",
+        timezone="Europe/Madrid",
+        project="proj",
+    )
+
+    assert '"window": "last_7_days"' in command
+
+
 def test_run_batch_threads_window_to_run_report(tmp_path, registry):
     entries = [BatchEntry(report="windowed_report", client="acme", window="last_7_days")]
     executor = FakeExecutor(pd.DataFrame({"dummy_col": [1]}))

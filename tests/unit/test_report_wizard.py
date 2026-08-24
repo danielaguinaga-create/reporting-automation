@@ -1,12 +1,13 @@
 import pytest
 
-from reporting_automation.config.models import OutputFormat, ReportKind
+from reporting_automation.config.models import DeliveryChannel, OutputFormat, ReportKind
 from reporting_automation.exceptions import ReportConfigError
 from reporting_automation.report_wizard import (
     WizardInput,
     build_report_config,
     delete_existing_report,
     parse_param_declarations_block,
+    parse_recipients_block,
     save_new_report,
 )
 
@@ -84,6 +85,31 @@ def test_build_report_config_custom_kind_keeps_client_id():
     assert report.kind == ReportKind.CUSTOM
     assert report.client_id == "abc123hash"
     assert report.params_schema == {}
+
+
+def test_build_report_config_defaults_to_no_delivery():
+    report = build_report_config(_form())
+    assert report.delivery_channels == []
+    assert report.default_recipients == []
+
+
+def test_build_report_config_propagates_delivery_channels_and_recipients():
+    report = build_report_config(
+        _form(
+            delivery_channels=[DeliveryChannel.EMAIL, DeliveryChannel.GDRIVE],
+            default_recipients=["ops@meetingdoctors.com", "cliente@example.com"],
+        )
+    )
+    assert report.delivery_channels == [DeliveryChannel.EMAIL, DeliveryChannel.GDRIVE]
+    assert report.default_recipients == ["ops@meetingdoctors.com", "cliente@example.com"]
+
+
+def test_parse_recipients_block_parses_multiple_lines_and_ignores_blanks():
+    assert parse_recipients_block("a@x.com\n\n  \nb@y.com") == ["a@x.com", "b@y.com"]
+
+
+def test_parse_recipients_block_empty_text_returns_empty_list():
+    assert parse_recipients_block("") == []
 
 
 def test_save_new_report_writes_yaml_and_sql(tmp_path):

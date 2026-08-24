@@ -36,7 +36,7 @@ def decode_pubsub_payload(envelope: dict | None) -> dict:
     """Decodifica el body de un push de Pub/Sub a un dict.
 
     Formato esperado (el que arma Cloud Scheduler con --message-body):
-    {"message": {"data": "<base64 de {reporte,cliente,receptores,params}>"}}
+    {"message": {"data": "<base64 de {reporte,cliente,receptores,params,window}>"}}
     """
     if not envelope or "message" not in envelope or "data" not in envelope["message"]:
         raise InvalidPubSubEnvelope("falta message.data en el push de Pub/Sub")
@@ -62,6 +62,7 @@ def handle_push():
     client_id = payload.get("cliente")
     params = payload.get("params") or {}
     receptores = payload.get("receptores") or []
+    window = payload.get("window")
 
     if not report_id or not client_id:
         logger.error("Payload sin 'reporte'/'cliente': %s", payload)
@@ -84,6 +85,7 @@ def handle_push():
             registry=registry,
             executor=executor,
             client_registry=client_registry,
+            window=window,
         )
 
         if result.status == "failure":

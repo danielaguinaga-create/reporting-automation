@@ -92,6 +92,21 @@ def test_handle_push_valid_payload_returns_200(client):
     assert FakeStorageClient.uploads[0][0].startswith("acme/")
 
 
+def test_handle_push_resolves_window_preset(client):
+    """Un reporte programado con ventana de tiempo (start_date/end_date en su
+    params_schema) debe poder llegar via Pub/Sub con solo el preset -- antes
+    el payload no cargaba 'window' y el entrypoint no lo pasaba a run_report,
+    asi que esto fallaba con un parametro faltante."""
+    envelope = _pubsub_envelope(
+        {"reporte": "windowed_report", "cliente": "acme", "params": {}, "window": "last_7_days"}
+    )
+
+    response = client.post("/", json=envelope)
+
+    assert response.status_code == 200
+    assert len(FakeStorageClient.uploads) == 1
+
+
 def test_handle_push_missing_report_or_client_returns_400(client):
     envelope = _pubsub_envelope({"cliente": "acme"})
     response = client.post("/", json=envelope)

@@ -19,7 +19,7 @@ from reporting_automation.batch import (
 from reporting_automation.company_catalog import fetch_active_companies
 from reporting_automation.config.client_import import slugify
 from reporting_automation.config.loader import load_settings
-from reporting_automation.config.models import OutputFormat, ReportKind
+from reporting_automation.config.models import DeliveryChannel, OutputFormat, ReportKind
 from reporting_automation.config.registry import ReportRegistry
 from reporting_automation.exceptions import ReportConfigError
 from reporting_automation.gcs_landing import try_land_rendered_files
@@ -41,7 +41,12 @@ from reporting_automation.query_builder import (
     suggest_join_columns,
 )
 from reporting_automation.rendering.template_registry import TemplateRegistry
-from reporting_automation.report_wizard import WizardInput, delete_existing_report, save_new_report
+from reporting_automation.report_wizard import (
+    WizardInput,
+    delete_existing_report,
+    parse_recipients_block,
+    save_new_report,
+)
 from reporting_automation.time_window import WINDOW_PRESETS, resolve_window
 
 _WINDOW_PARAM_NAMES = ("start_date", "end_date")
@@ -702,6 +707,27 @@ with tab_new:
         "Plantilla (opcional, para pdf/html)", template_options, key="wizard_template"
     )
 
+    st.markdown("**Entrega automática (opcional)**")
+    st.caption(
+        "Sin esto, el reporte solo se puede descargar a mano -- no se manda por correo ni "
+        "se sube a Drive, ni corriendo `run --deliver` ni cuando se despliegue Fase 3."
+    )
+    delivery_channels_raw = st.multiselect(
+        "Canales de entrega",
+        [c.value for c in DeliveryChannel],
+        key="wizard_delivery_channels",
+    )
+    if DeliveryChannel.FTP.value in delivery_channels_raw:
+        st.caption(
+            "Aviso: 'ftp' todavía no está implementado (no hay servidor FTP real para "
+            "probarlo) -- el reporte queda registrado, pero la entrega fallará para ese canal."
+        )
+    default_recipients_raw = st.text_area(
+        "Destinatarios por defecto (uno por línea, opcional)",
+        help="Se usan si se corre/programa este reporte sin destinatarios propios.",
+        key="wizard_default_recipients",
+    )
+
     if st.button("Guardar como plantilla", type="primary"):
         try:
             if not new_name:
@@ -724,6 +750,8 @@ with tab_new:
                 uses_time_window=uses_time_window,
                 template=None if template_choice == "(default)" else template_choice,
                 description=new_description or None,
+                delivery_channels=[DeliveryChannel(c) for c in delivery_channels_raw],
+                default_recipients=parse_recipients_block(default_recipients_raw),
             )
             yaml_path, sql_path = save_new_report(Path(settings.reports_dir), form)
         except (ValueError, ValidationError, ReportConfigError) as exc:
@@ -829,6 +857,24 @@ with tab_schedule:
                     "Se recalcula en cada corrida (ej. 'Mes anterior' siempre resuelve el mes "
                     "anterior a la fecha en que corre, no una fecha fija de hoy)."
                 )
+            schedule_recipients: list[str] = []
+            if schedule_report.delivery_channels:
+                channels_text = ", ".join(c.value for c in schedule_report.delivery_channels)
+                schedule_recipients_raw = st.text_area(
+                    f"Destinatarios para esta programación (uno por línea, canales: {channels_text})",
+                    help=(
+                        "Dejalo vacío para usar los destinatarios por defecto del reporte "
+                        f"({', '.join(schedule_report.default_recipients) or 'ninguno configurado'})."
+                    ),
+                    key="schedule_recipients",
+                )
+                schedule_recipients = parse_recipients_block(schedule_recipients_raw)
+            else:
+                st.caption(
+                    "Este reporte no tiene canales de entrega configurados (email/gdrive) -- "
+                    "se va a generar y aterrizar en GCS, pero no se le va a mandar a nadie. "
+                    "Configuralo desde 'Crear reporte nuevo' si necesitas que se entregue solo."
+                )
             freq_choice = st.selectbox(
                 "Frecuencia",
                 list(_SCHEDULE_PRESETS.keys()),
@@ -852,6 +898,7 @@ with tab_schedule:
                         client=schedule_client_id,
                         params=schedule_params,
                         window=schedule_window,
+                        recipients=schedule_recipients,
                         schedule=cron,
                     )
                     batch_entries.append(new_entry)

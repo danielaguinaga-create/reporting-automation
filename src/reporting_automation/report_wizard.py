@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
-from reporting_automation.config.models import OutputFormat, ReportConfig, ReportKind
+from reporting_automation.config.models import DeliveryChannel, OutputFormat, ReportConfig, ReportKind
 from reporting_automation.config.scaffold import delete_report, scaffold_report
 from reporting_automation.query.bigquery_client import parse_param_declaration
 
@@ -30,6 +30,8 @@ class WizardInput:
     uses_time_window: bool
     template: str | None = None
     description: str | None = None
+    delivery_channels: list[DeliveryChannel] = field(default_factory=list)
+    default_recipients: list[str] = field(default_factory=list)
 
 
 def parse_param_declarations_block(text: str) -> dict[str, str]:
@@ -48,6 +50,11 @@ def parse_param_declarations_block(text: str) -> dict[str, str]:
     return schema
 
 
+def parse_recipients_block(text: str) -> list[str]:
+    """Un destinatario por linea; lineas vacias se ignoran."""
+    return [line.strip() for line in text.splitlines() if line.strip()]
+
+
 def build_report_config(form: WizardInput) -> ReportConfig:
     params_schema = parse_param_declarations_block(form.param_declarations)
     if form.kind == ReportKind.SHARED:
@@ -62,6 +69,8 @@ def build_report_config(form: WizardInput) -> ReportConfig:
         client_id=form.client_id,
         sql_file=f"{form.id}.sql",
         output_formats=form.output_formats,
+        delivery_channels=form.delivery_channels,
+        default_recipients=form.default_recipients,
         params_schema=params_schema,
         description=form.description,
         template=form.template,

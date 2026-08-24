@@ -81,6 +81,7 @@ def build_scheduler_job_command(
             "cliente": entry.client,
             "receptores": entry.recipients,
             "params": entry.params,
+            "window": entry.window,
         }
     )
     schedule = entry.schedule or default_schedule

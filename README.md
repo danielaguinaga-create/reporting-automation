@@ -482,12 +482,15 @@ servicio "dispatcher" intermedio.
 Lo que ya existe y está probado (con mocks, sin tocar GCP real):
 
 - `main_entrypoint.py`: Flask app que recibe el push de Pub/Sub, decodifica
-  `{reporte, cliente, receptores, params}` (base64 + JSON), corre
+  `{reporte, cliente, receptores, params, window}` (base64 + JSON), corre
   `orchestrator.run_report` (el mismo que usan `run`/`run-batch`), y sube
   los archivos generados a un bucket de GCS vía `gcs_landing.py`
-  (`gs://<bucket>/<cliente>/<year>/<mes>/<archivo>`). `receptores` no dispara
-  ningún envío todavía (no hay delivery real, ver Fase 2) — solo queda en el
-  log estructurado para trazabilidad futura.
+  (`gs://<bucket>/<cliente>/<year>/<mes>/<archivo>`). Si el reporte tiene
+  `delivery_channels` configurado, despues despacha `receptores` por
+  correo/GDrive via `delivery/dispatch.py` (`EmailDelivery`/`GDriveDelivery`)
+  -- un fallo de entrega se loguea pero no tumba el 200 (ver
+  `main_entrypoint.handle_push`), para no reprocesar el reporte solo porque
+  el envio fallo.
 - `logging_setup.py`: usa Google Cloud Logging si detecta que corre en
   Cloud Run (`K_SERVICE` seteado), o logging de consola en local/tests.
 - `Dockerfile`: imagen del servicio (gunicorn sirviendo el Flask app).
@@ -495,9 +498,20 @@ Lo que ya existe y está probado (con mocks, sin tocar GCP real):
   `gcloud scheduler jobs create pubsub` (uno por línea de
   `config/monthly_batch.yaml`) — no crea nada, solo genera el texto.
 
-**Por qué el bucket de GCS y no delivery real:** Fase 2 (correo/FTP/GDrive
-con Secret Manager) todavía no existe. Aterrizar en GCS es la entrega
-interina (alguien baja el archivo del bucket) y a la vez el registro de
+**El codigo de entrega (Fase 2) esta escrito y anda, pero hoy no hace nada
+de verdad, por dos motivos distintos:**
+
+1. Ningun reporte tiene `delivery_channels` configurado todavia (se puede
+   declarar via `new-report --delivery-channel` en la CLI, o desde la
+   pestaña "Crear reporte nuevo" de la UI). Sin eso, `main_entrypoint.py`
+   ni siquiera intenta despachar nada.
+2. Aunque un reporte lo tuviera, la infraestructura que ese codigo necesita
+   todavia no existe: el secret `internal-smtp` en Secret Manager (host,
+   port, user, password, from_address) no esta creado, y
+   `gdrive_root_folder_id` en `config/settings.yaml` sigue en `null`.
+
+Hasta que se resuelvan esos dos puntos, aterrizar en GCS sigue siendo la
+entrega real (alguien baja el archivo del bucket) y el registro de
 auditoría que pide el diagrama.
 
 **Región confirmada:** `europe-southwest1` — es la misma región donde vive

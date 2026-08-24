@@ -4,7 +4,7 @@ import pandas as pd
 import pytest
 from streamlit.testing.v1 import AppTest
 
-from reporting_automation.config.models import ReportKind
+from reporting_automation.config.models import DeliveryChannel, ReportKind
 from reporting_automation.llm.schema_introspection import ColumnInfo, TableSchema
 
 APP_PATH = str(
@@ -232,7 +232,37 @@ def test_wizard_save_success_calls_save_new_report_and_reruns(monkeypatch):
     assert len(calls) == 1
     assert calls[0].id == "nuevo_reporte_test"
     assert calls[0].sql_text == "SELECT 1;"
+    assert calls[0].delivery_channels == []
+    assert calls[0].default_recipients == []
     assert len(at.success) == 1
+
+
+def test_wizard_save_with_delivery_channels_and_recipients(monkeypatch):
+    monkeypatch.setattr("google.cloud.bigquery.Client", FakeBigQueryClient)
+
+    calls = []
+
+    def fake_save_new_report(reports_dir, form):
+        calls.append(form)
+        return Path("/tmp/fake/shared/x.yaml"), Path("/tmp/fake/shared/x.sql")
+
+    monkeypatch.setattr("reporting_automation.report_wizard.save_new_report", fake_save_new_report)
+
+    at = AppTest.from_file(APP_PATH)
+    at.run()
+
+    at.text_input(key="wizard_name").set_value("Nuevo Reporte Test").run()
+    at.text_area(key="wizard_sql").set_value("SELECT 1;").run()
+    at.multiselect(key="wizard_delivery_channels").set_value(["email", "gdrive"]).run()
+    at.text_area(key="wizard_default_recipients").set_value("a@x.com\nb@y.com").run()
+
+    save_button = next(b for b in at.button if b.label == "Guardar como plantilla")
+    save_button.click().run()
+
+    assert not at.exception
+    assert len(calls) == 1
+    assert calls[0].delivery_channels == [DeliveryChannel.EMAIL, DeliveryChannel.GDRIVE]
+    assert calls[0].default_recipients == ["a@x.com", "b@y.com"]
 
 
 def test_wizard_is_per_company_defaults_to_true_and_shows_scope_radio(monkeypatch):
@@ -419,11 +449,55 @@ def test_schedule_tab_add_entry_saves_manifest_and_shows_gcloud_command(monkeypa
     assert saved[0][0].schedule == "0 6 * * *"
     assert saved[0][0].params == {"id_company": "498cb81c5ba7325f"}
     assert saved[0][0].window is None
+    assert saved[0][0].recipients == []
     assert len(at.success) == 1
     assert len(at.code) == 1
     assert "chats_detalle_protec" in at.code[0].value
     with pytest.raises(KeyError):
         at.selectbox(key="schedule_window")
+    with pytest.raises(KeyError):
+        at.text_area(key="schedule_recipients")
+
+
+def test_schedule_tab_report_with_delivery_channels_shows_and_saves_recipients(monkeypatch):
+    """Un reporte sin delivery_channels no tiene a quien entregarle nada --
+    solo mostrar el campo de destinatarios cuando el reporte SI tiene un
+    canal de entrega configurado (ver gap: ningun reporte real lo tenia,
+    y la UI no dejaba configurarlo)."""
+    monkeypatch.setattr("google.cloud.bigquery.Client", FakeBigQueryClient)
+
+    from reporting_automation.config.registry import ReportRegistry
+
+    original_get = ReportRegistry.get
+
+    def patched_get(self, report_id):
+        report = original_get(self, report_id)
+        if report_id == "chats_detalle":
+            return report.model_copy(update={"delivery_channels": [DeliveryChannel.EMAIL]})
+        return report
+
+    monkeypatch.setattr(ReportRegistry, "get", patched_get)
+    monkeypatch.setattr("reporting_automation.batch.load_batch_manifest", lambda path: [])
+    saved = []
+    monkeypatch.setattr(
+        "reporting_automation.batch.save_batch_manifest",
+        lambda path, entries: saved.append(list(entries)),
+    )
+
+    at = AppTest.from_file(APP_PATH)
+    at.run()
+
+    at.selectbox(key="schedule_report_id").select("chats_detalle").run()
+    at.selectbox(key="schedule_client").select("498cb81c5ba7325f").run()
+    at.text_area(key="schedule_recipients").set_value("ops@meetingdoctors.com\ncliente@example.com").run()
+    at.selectbox(key="schedule_freq").select("0 6 * * *").run()
+
+    add_button = next(b for b in at.button if b.label == "Agregar a la programación")
+    add_button.click().run()
+
+    assert not at.exception
+    assert len(saved) == 1
+    assert saved[0][0].recipients == ["ops@meetingdoctors.com", "cliente@example.com"]
 
 
 def test_schedule_tab_windowed_report_shows_and_saves_window_preset(monkeypatch):
