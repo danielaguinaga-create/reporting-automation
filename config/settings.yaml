@@ -7,9 +7,9 @@ bigquery_dataset: 03_BaseModel
 reports_dir: config/reports
 clients_dir: config/clients
 
-# Bucket propuesto para Fase 3 (aterrizaje de reportes generados via Cloud
-# Run Service). Nombre PROPUESTO, sin confirmar -- no existe todavia, ver
-# README seccion Roadmap/Fase 3.
+# Bucket de aterrizaje de los reportes generados (CLI + UI), ver
+# gcs_landing.py. Creado en europe-southwest1 (misma region que el dataset
+# de BigQuery), con uniform bucket-level access.
 trace_bucket: reporting-automation-trace
 
 # Carpeta raiz de Drive para delivery (Fase 2). No configurada todavia --

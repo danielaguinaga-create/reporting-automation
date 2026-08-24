@@ -506,17 +506,20 @@ el dataset `03_BaseModel` de BigQuery (verificado con
 
 **Probado localmente sin desplegar:** con el test client de Flask contra
 BigQuery real (`python /tmp/smoke_entrypoint.py`-style, ver
-`tests/unit/test_main_entrypoint.py` para el patrón) — la query corre bien;
-solo falla la subida a GCS con un 404 claro porque el bucket todavía no
-existe. Eso es exactamente lo esperado sin haber desplegado nada.
+`tests/unit/test_main_entrypoint.py` para el patrón) — la query corre bien.
+
+**Bucket de trace ya creado:** `gs://reporting-automation-trace`
+(`europe-southwest1`, uniform bucket-level access), verificado subiendo y
+borrando un archivo de prueba con el mismo código que usa `gcs_landing.py`.
+Ya no es un nombre propuesto — el aterrizaje en GCS funciona de punta a
+punta desde la CLI y la UI.
 
 **Pendiente — comandos de despliegue, NO ejecutados** (correr uno por uno,
 revisando cada paso, cuando se decida desplegar de verdad):
 
 ```bash
-# Una sola vez: habilitar APIs, crear bucket y tema
+# Una sola vez: habilitar APIs y crear el tema (el bucket ya existe, ver arriba)
 gcloud services enable run.googleapis.com eventarc.googleapis.com pubsub.googleapis.com --project=data-prd-424213
-gcloud storage buckets create gs://reporting-automation-trace --project=data-prd-424213 --location=europe-southwest1
 gcloud pubsub topics create reporting-automation-triggers --project=data-prd-424213
 
 # Build + deploy del Cloud Run Service
@@ -556,8 +559,8 @@ correr el pipeline a mano.
 
 ### TODOs abiertos (decisiones pendientes de la empresa, no inventadas aquí)
 
-1. Nombre final del bucket GCS de trace (`reporting-automation-trace` es
-   propuesto, no creado).
+1. ~~Nombre final del bucket GCS de trace~~ — resuelto:
+   `reporting-automation-trace`, ya creado en `europe-southwest1`.
 2. Nombre final del tema de Pub/Sub (y si hay uno por ambiente dev/prod).
 3. Detalles del trigger de Cloud Build (host del repo, estrategia de ramas,
    nombre del Artifact Registry) — este proyecto ni siquiera es un repo git
