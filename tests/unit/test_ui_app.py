@@ -5,6 +5,7 @@ import pytest
 from streamlit.testing.v1 import AppTest
 
 from reporting_automation.config.models import ReportKind
+from reporting_automation.llm.schema_introspection import ColumnInfo, TableSchema
 
 APP_PATH = str(
     Path(__file__).resolve().parents[2] / "src" / "reporting_automation" / "ui_app.py"
@@ -36,6 +37,24 @@ class FakeBigQueryClient:
         return FakeQueryJob(pd.DataFrame({"dummy_col": [1, 2, 3]}))
 
 
+class FakeGcsBlob:
+    def upload_from_filename(self, path):
+        pass
+
+
+class FakeGcsBucket:
+    def blob(self, name):
+        return FakeGcsBlob()
+
+
+class FakeGcsClient:
+    def __init__(self, project: str | None = None):
+        pass
+
+    def bucket(self, bucket_name):
+        return FakeGcsBucket()
+
+
 def test_app_renders_report_selector(monkeypatch):
     monkeypatch.setattr("google.cloud.bigquery.Client", FakeBigQueryClient)
 
@@ -50,6 +69,7 @@ def test_app_renders_report_selector(monkeypatch):
 
 def test_running_a_report_shows_success_and_download_button(monkeypatch):
     monkeypatch.setattr("google.cloud.bigquery.Client", FakeBigQueryClient)
+    monkeypatch.setattr("google.cloud.storage.Client", FakeGcsClient)
 
     at = AppTest.from_file(APP_PATH)
     at.run()
@@ -62,6 +82,30 @@ def test_running_a_report_shows_success_and_download_button(monkeypatch):
     assert len(at.download_button) >= 1
     assert len(at.dataframe) == 1
     assert at.dataframe[0].value["dummy_col"].tolist() == [1, 2, 3]
+    gcs_captions = [c.value for c in at.caption if "gs://reporting-automation-trace" in c.value]
+    assert len(gcs_captions) == 1
+
+
+def test_running_a_report_shows_warning_when_gcs_bucket_missing(monkeypatch):
+    monkeypatch.setattr("google.cloud.bigquery.Client", FakeBigQueryClient)
+
+    class BoomGcsClient:
+        def __init__(self, project=None):
+            pass
+
+        def bucket(self, bucket_name):
+            raise RuntimeError("404 no existe el bucket")
+
+    monkeypatch.setattr("google.cloud.storage.Client", BoomGcsClient)
+
+    at = AppTest.from_file(APP_PATH)
+    at.run()
+    at.button[0].click().run()
+
+    assert not at.exception
+    assert len(at.success) == 1  # el fallo de GCS no tumba la corrida
+    warning_captions = [c.value for c in at.caption if "no se pudo copiar a gcs" in c.value.lower()]
+    assert len(warning_captions) == 1
 
 
 def test_shared_report_client_picker_comes_from_bigquery_not_yaml(monkeypatch):
@@ -117,6 +161,7 @@ def test_windowed_report_custom_range_shows_date_inputs(monkeypatch):
 
 def test_running_windowed_report_with_preset_succeeds(monkeypatch):
     monkeypatch.setattr("google.cloud.bigquery.Client", FakeBigQueryClient)
+    monkeypatch.setattr("google.cloud.storage.Client", FakeGcsClient)
 
     at = AppTest.from_file(APP_PATH)
     at.run()
@@ -424,3 +469,170 @@ def test_schedule_tab_remove_button_calls_save_with_entry_removed(monkeypatch):
 
     assert not at.exception
     assert saved == [[]]
+
+
+_FAKE_BQ_SCHEMA = [
+    TableSchema(
+        table_name="DimUsers",
+        columns=[
+            ColumnInfo(name="idUser", data_type="STRING"),
+            ColumnInfo(name="idCompany", data_type="STRING"),
+            ColumnInfo(name="UserType", data_type="STRING"),
+            ColumnInfo(name="UserSubscribedAtUTC", data_type="TIMESTAMP"),
+        ],
+    ),
+    TableSchema(
+        table_name="FactChatConsultations",
+        columns=[
+            ColumnInfo(name="idUser", data_type="STRING"),
+            ColumnInfo(name="ChatSentAtUTC", data_type="TIMESTAMP"),
+        ],
+    ),
+]
+
+
+def test_wizard_hand_written_mode_is_default_and_skips_schema_lookup(monkeypatch):
+    monkeypatch.setattr("google.cloud.bigquery.Client", FakeBigQueryClient)
+    schema_calls = []
+    monkeypatch.setattr(
+        "reporting_automation.llm.schema_introspection.get_schema",
+        lambda *a, **k: schema_calls.append(1) or _FAKE_BQ_SCHEMA,
+    )
+
+    at = AppTest.from_file(APP_PATH)
+    at.run()
+
+    assert not at.exception
+    assert at.radio(key="wizard_sql_mode").value == "Escribir a mano"
+    assert schema_calls == []
+
+
+def test_visual_builder_pick_base_table_shows_column_checkboxes(monkeypatch):
+    monkeypatch.setattr("google.cloud.bigquery.Client", FakeBigQueryClient)
+    monkeypatch.setattr(
+        "reporting_automation.llm.schema_introspection.get_schema", lambda *a, **k: _FAKE_BQ_SCHEMA
+    )
+
+    at = AppTest.from_file(APP_PATH)
+    at.run()
+    at.radio(key="wizard_sql_mode").set_value("Constructor visual").run()
+    at.selectbox(key="qb_base_table_choice").select("DimUsers").run()
+
+    use_button = next(b for b in at.button if b.label == "Usar esta tabla")
+    use_button.click().run()
+
+    assert not at.exception
+    assert any(c.key == "qb_col_DimUsers_UserType" for c in at.checkbox)
+
+
+def test_visual_builder_generates_sql_for_single_table(monkeypatch):
+    monkeypatch.setattr("google.cloud.bigquery.Client", FakeBigQueryClient)
+    monkeypatch.setattr(
+        "reporting_automation.llm.schema_introspection.get_schema", lambda *a, **k: _FAKE_BQ_SCHEMA
+    )
+
+    at = AppTest.from_file(APP_PATH)
+    at.run()
+    at.radio(key="wizard_sql_mode").set_value("Constructor visual").run()
+    at.selectbox(key="qb_base_table_choice").select("DimUsers").run()
+    next(b for b in at.button if b.label == "Usar esta tabla").click().run()
+
+    at.checkbox(key="qb_col_DimUsers_UserType").set_value(True).run()
+    next(b for b in at.button if b.label == "Generar SQL").click().run()
+
+    assert not at.exception
+    sql = at.text_area(key="wizard_sql").value
+    assert "t0.UserType" in sql
+    assert "FROM `data-prd-424213.03_BaseModel.DimUsers` AS t0" in sql
+
+
+def test_visual_builder_join_suggests_shared_column_and_includes_it_in_sql(monkeypatch):
+    monkeypatch.setattr("google.cloud.bigquery.Client", FakeBigQueryClient)
+    monkeypatch.setattr(
+        "reporting_automation.llm.schema_introspection.get_schema", lambda *a, **k: _FAKE_BQ_SCHEMA
+    )
+
+    at = AppTest.from_file(APP_PATH)
+    at.run()
+    at.radio(key="wizard_sql_mode").set_value("Constructor visual").run()
+    at.selectbox(key="qb_base_table_choice").select("DimUsers").run()
+    next(b for b in at.button if b.label == "Usar esta tabla").click().run()
+
+    at.selectbox(key="qb_new_table").select("FactChatConsultations").run()
+    assert at.selectbox(key="qb_join_col_left").value == "idUser"
+    assert at.selectbox(key="qb_join_col_right").value == "idUser"
+    next(b for b in at.button if b.label == "Agregar tabla").click().run()
+
+    assert not at.exception
+    assert any(c.key == "qb_col_FactChatConsultations_ChatSentAtUTC" for c in at.checkbox)
+
+    at.checkbox(key="qb_col_DimUsers_UserType").set_value(True).run()
+    at.checkbox(key="qb_col_FactChatConsultations_ChatSentAtUTC").set_value(True).run()
+    next(b for b in at.button if b.label == "Generar SQL").click().run()
+
+    assert not at.exception
+    sql = at.text_area(key="wizard_sql").value
+    assert "INNER JOIN `data-prd-424213.03_BaseModel.FactChatConsultations` AS t1" in sql
+    assert "ON t0.idUser = t1.idUser" in sql
+    assert "t1.ChatSentAtUTC" in sql
+
+
+def test_visual_builder_calculated_field_appears_in_generated_sql(monkeypatch):
+    monkeypatch.setattr("google.cloud.bigquery.Client", FakeBigQueryClient)
+    monkeypatch.setattr(
+        "reporting_automation.llm.schema_introspection.get_schema", lambda *a, **k: _FAKE_BQ_SCHEMA
+    )
+
+    at = AppTest.from_file(APP_PATH)
+    at.run()
+    at.radio(key="wizard_sql_mode").set_value("Constructor visual").run()
+    at.selectbox(key="qb_base_table_choice").select("DimUsers").run()
+    next(b for b in at.button if b.label == "Usar esta tabla").click().run()
+
+    at.checkbox(key="qb_col_DimUsers_UserType").set_value(True).run()
+    assert at.selectbox(key="qb_calc_function").value == "COUNT"
+    at.text_input(key="qb_calc_alias").set_value("Total").run()
+    next(b for b in at.button if b.label == "Agregar campo calculado").click().run()
+
+    assert not at.exception
+    next(b for b in at.button if b.label == "Generar SQL").click().run()
+
+    sql = at.text_area(key="wizard_sql").value
+    assert "COUNT(*) AS Total" in sql
+    assert "GROUP BY t0.UserType" in sql
+
+
+def test_visual_builder_generate_without_columns_shows_error(monkeypatch):
+    monkeypatch.setattr("google.cloud.bigquery.Client", FakeBigQueryClient)
+    monkeypatch.setattr(
+        "reporting_automation.llm.schema_introspection.get_schema", lambda *a, **k: _FAKE_BQ_SCHEMA
+    )
+
+    at = AppTest.from_file(APP_PATH)
+    at.run()
+    at.radio(key="wizard_sql_mode").set_value("Constructor visual").run()
+    at.selectbox(key="qb_base_table_choice").select("DimUsers").run()
+    next(b for b in at.button if b.label == "Usar esta tabla").click().run()
+
+    next(b for b in at.button if b.label == "Generar SQL").click().run()
+
+    assert not at.exception
+    assert len(at.error) == 1
+
+
+def test_visual_builder_reset_clears_state(monkeypatch):
+    monkeypatch.setattr("google.cloud.bigquery.Client", FakeBigQueryClient)
+    monkeypatch.setattr(
+        "reporting_automation.llm.schema_introspection.get_schema", lambda *a, **k: _FAKE_BQ_SCHEMA
+    )
+
+    at = AppTest.from_file(APP_PATH)
+    at.run()
+    at.radio(key="wizard_sql_mode").set_value("Constructor visual").run()
+    at.selectbox(key="qb_base_table_choice").select("DimUsers").run()
+    next(b for b in at.button if b.label == "Usar esta tabla").click().run()
+
+    next(b for b in at.button if b.label == "Reiniciar constructor").click().run()
+
+    assert not at.exception
+    assert at.selectbox(key="qb_base_table_choice") is not None

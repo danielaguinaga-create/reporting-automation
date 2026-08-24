@@ -1,7 +1,7 @@
 from datetime import date
 
 from reporting_automation.config.models import OutputFormat
-from reporting_automation.gcs_landing import upload_rendered_files
+from reporting_automation.gcs_landing import try_land_rendered_files, upload_rendered_files
 from reporting_automation.rendering.base import RenderedFile
 
 
@@ -63,3 +63,44 @@ def test_upload_rendered_files_handles_multiple_files(tmp_path):
 def test_upload_rendered_files_empty_list_returns_empty(tmp_path):
     client = FakeGcsClient()
     assert upload_rendered_files(client, "b", "cliente", []) == []
+
+
+class BoomGcsClient:
+    def bucket(self, bucket_name: str):
+        raise RuntimeError("404 no existe el bucket")
+
+
+def test_try_land_rendered_files_returns_uris_on_success(tmp_path):
+    local_path = tmp_path / "r.csv"
+    local_path.write_text("a\n1\n")
+    rendered = [RenderedFile(format=OutputFormat.CSV, filename="r.csv", local_path=local_path)]
+
+    client = FakeGcsClient()
+    uris, error = try_land_rendered_files(
+        client, "mi-bucket", "protec", rendered, run_date=date(2026, 7, 1)
+    )
+
+    assert error is None
+    assert uris == ["gs://mi-bucket/protec/2026/07/r.csv"]
+
+
+def test_try_land_rendered_files_returns_error_instead_of_raising(tmp_path):
+    local_path = tmp_path / "r.csv"
+    local_path.write_text("a\n1\n")
+    rendered = [RenderedFile(format=OutputFormat.CSV, filename="r.csv", local_path=local_path)]
+
+    uris, error = try_land_rendered_files(BoomGcsClient(), "mi-bucket", "protec", rendered)
+
+    assert uris == []
+    assert "no existe el bucket" in error
+
+
+def test_try_land_rendered_files_no_bucket_configured_is_a_silent_noop(tmp_path):
+    local_path = tmp_path / "r.csv"
+    local_path.write_text("a\n1\n")
+    rendered = [RenderedFile(format=OutputFormat.CSV, filename="r.csv", local_path=local_path)]
+
+    uris, error = try_land_rendered_files(BoomGcsClient(), None, "protec", rendered)
+
+    assert uris == []
+    assert error is None

@@ -42,3 +42,27 @@ def upload_rendered_files(
         uris.append(f"gs://{bucket_name}/{blob_name}")
 
     return uris
+
+
+def try_land_rendered_files(
+    client: GcsClient,
+    bucket_name: str | None,
+    client_id: str,
+    rendered_files: list[RenderedFile],
+    run_date: date | None = None,
+) -> tuple[list[str], str | None]:
+    """Como `upload_rendered_files`, pero nunca levanta.
+
+    Pensada para las corridas interactivas (CLI/UI): si `bucket_name` no esta
+    configurado, o el bucket todavia no existe, o faltan permisos, la corrida
+    ya genero el archivo local con exito -- este paso es una copia de
+    auditoria adicional, no debe hacer fallar el reporte. Devuelve
+    `(uris, None)` si subio bien, o `([], mensaje_de_error)` si no.
+    """
+    if not bucket_name:
+        return [], None
+    try:
+        uris = upload_rendered_files(client, bucket_name, client_id, rendered_files, run_date)
+    except Exception as exc:  # noqa: BLE001 - se reporta, no debe tumbar la corrida
+        return [], str(exc)
+    return uris, None

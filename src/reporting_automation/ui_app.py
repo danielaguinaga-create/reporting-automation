@@ -7,7 +7,7 @@ from pathlib import Path
 os.environ.setdefault("DYLD_LIBRARY_PATH", "/opt/homebrew/lib")
 
 import streamlit as st
-from google.cloud import bigquery
+from google.cloud import bigquery, storage
 from pydantic import ValidationError
 
 from reporting_automation.batch import (
@@ -23,14 +23,31 @@ from reporting_automation.config.loader import load_settings
 from reporting_automation.config.models import OutputFormat, ReportKind
 from reporting_automation.config.registry import ReportRegistry
 from reporting_automation.exceptions import ReportConfigError
+from reporting_automation.gcs_landing import try_land_rendered_files
+from reporting_automation.llm.schema_introspection import get_schema
 from reporting_automation.orchestrator import run_report
 from reporting_automation.query.bigquery_client import BigQueryExecutor
+from reporting_automation.query_builder import (
+    AGGREGATE_FUNCTIONS,
+    CASE_OPERATORS,
+    DATE_BUCKET_GRANULARITIES,
+    TEXT_FUNCTIONS,
+    CalculatedField,
+    CaseFieldSpec,
+    DateBucketSpec,
+    JoinSpec,
+    QueryBuilderSpec,
+    TextFieldSpec,
+    build_sql,
+    suggest_join_columns,
+)
 from reporting_automation.rendering.template_registry import TemplateRegistry
 from reporting_automation.report_wizard import WizardInput, delete_existing_report, save_new_report
 from reporting_automation.time_window import WINDOW_PRESETS, resolve_window
 
 _WINDOW_PARAM_NAMES = ("start_date", "end_date")
 _CUSTOM_WINDOW_KEY = "custom"
+_DATE_COLUMN_TYPES = {"DATE", "DATETIME", "TIMESTAMP"}
 
 _BATCH_MANIFEST_PATH = Path("config/monthly_batch.yaml")
 
@@ -63,6 +80,13 @@ settings, registry, client_registry = _load_registries()
 def _load_company_catalog():
     client = bigquery.Client(project=settings.gcp_project)
     return fetch_active_companies(client, settings.gcp_project, settings.bigquery_dataset)
+
+
+@st.cache_data(ttl=24 * 3600, show_spinner="Leyendo el esquema de BigQuery...")
+def _load_bq_schema():
+    client = bigquery.Client(project=settings.gcp_project)
+    cache_path = Path(".cache") / f"schema_{settings.bigquery_dataset}.json"
+    return get_schema(client, settings.gcp_project, settings.bigquery_dataset, cache_path)
 
 
 def _company_picker(key: str) -> tuple[str, str] | None:
@@ -208,6 +232,14 @@ with tab_run:
                             file_name=rendered.filename,
                             key=f"download_{rendered.filename}",
                         )
+                    gcs_client = storage.Client(project=settings.gcp_project)
+                    gcs_uris, gcs_error = try_land_rendered_files(
+                        gcs_client, settings.trace_bucket, client_id, result.rendered_files
+                    )
+                    if gcs_error:
+                        st.caption(f"No se pudo copiar a GCS ({settings.trace_bucket}): {gcs_error}")
+                    elif gcs_uris:
+                        st.caption("Copia de auditoría en GCS: " + ", ".join(gcs_uris))
                     if result.preview is not None:
                         st.caption(
                             f"Vista previa (primeras {len(result.preview)} de {result.rows} filas)"
@@ -270,6 +302,389 @@ with tab_new:
         "No hace falta declarar start_date/end_date aquí si activaste la ventana de tiempo arriba.",
         key="wizard_params",
     )
+    sql_mode = st.radio(
+        "Cómo cargar el SQL",
+        ["Escribir a mano", "Constructor visual"],
+        format_func=lambda k: k,
+        key="wizard_sql_mode",
+    )
+
+    if sql_mode == "Constructor visual":
+        st.caption(
+            "Elegí tablas y columnas, armá los joins entre ellas y agregá campos calculados "
+            "si hace falta -- el SQL se arma solo, sin escribir una sola línea."
+        )
+        try:
+            schema_tables = _load_bq_schema()
+        except Exception as exc:  # noqa: BLE001 - se reporta, no debe tumbar la pagina
+            st.error(f"No se pudo leer el esquema de BigQuery: {exc}")
+            schema_tables = []
+        tables_by_name = {t.table_name: t for t in schema_tables}
+        all_table_names = sorted(tables_by_name)
+
+        qb_tables: list[str] = st.session_state.setdefault("qb_tables", [])
+        qb_joins: list[dict] = st.session_state.setdefault("qb_joins", [])
+        qb_columns: dict[str, set[str]] = st.session_state.setdefault("qb_columns", {})
+        qb_calculated: list[dict] = st.session_state.setdefault("qb_calculated", [])
+        qb_date_buckets: list[dict] = st.session_state.setdefault("qb_date_buckets", [])
+        qb_case_fields: list[dict] = st.session_state.setdefault("qb_case_fields", [])
+        qb_text_fields: list[dict] = st.session_state.setdefault("qb_text_fields", [])
+
+        if not qb_tables:
+            base_table = st.selectbox(
+                "Tabla principal", all_table_names, key="qb_base_table_choice"
+            )
+            if st.button("Usar esta tabla"):
+                qb_tables.append(base_table)
+                qb_columns[base_table] = set()
+                st.rerun()
+        else:
+            st.markdown("**Tablas del reporte**")
+            for table_name in qb_tables:
+                is_base = table_name == qb_tables[0]
+                label = f"📋 {table_name}" + (" (tabla principal)" if is_base else "")
+                with st.expander(label):
+                    selected = qb_columns.setdefault(table_name, set())
+                    for col in tables_by_name[table_name].columns:
+                        checked = st.checkbox(
+                            f"{col.name} ({col.data_type})",
+                            value=col.name in selected,
+                            key=f"qb_col_{table_name}_{col.name}",
+                        )
+                        if checked:
+                            selected.add(col.name)
+                        else:
+                            selected.discard(col.name)
+
+            remaining_tables = [t for t in all_table_names if t not in qb_tables]
+            if remaining_tables:
+                st.markdown("**Agregar otra tabla (join)**")
+                new_table = st.selectbox("Tabla a agregar", remaining_tables, key="qb_new_table")
+                join_to = st.selectbox("Unir con", qb_tables, key="qb_join_to")
+                suggested = suggest_join_columns(tables_by_name, join_to, new_table)
+                left_options = [c.name for c in tables_by_name[join_to].columns]
+                right_options = [c.name for c in tables_by_name[new_table].columns]
+                default_left = suggested[0] if suggested else left_options[0]
+                default_right = suggested[0] if suggested else right_options[0]
+                col_a, col_b = st.columns(2)
+                with col_a:
+                    join_col_left = st.selectbox(
+                        f"Columna de {join_to}",
+                        left_options,
+                        index=left_options.index(default_left),
+                        key="qb_join_col_left",
+                    )
+                with col_b:
+                    join_col_right = st.selectbox(
+                        f"Columna de {new_table}",
+                        right_options,
+                        index=right_options.index(default_right),
+                        key="qb_join_col_right",
+                    )
+                join_type = st.radio(
+                    "Tipo de join", ["INNER", "LEFT"], key="qb_join_type", horizontal=True
+                )
+                if st.button("Agregar tabla"):
+                    qb_tables.append(new_table)
+                    qb_joins.append(
+                        {
+                            "left_table": join_to,
+                            "left_column": join_col_left,
+                            "right_table": new_table,
+                            "right_column": join_col_right,
+                            "join_type": join_type,
+                        }
+                    )
+                    qb_columns[new_table] = set()
+                    st.rerun()
+
+            all_picked_columns = [
+                (table, col.name) for table in qb_tables for col in tables_by_name[table].columns
+            ]
+
+            if is_per_company:
+                company_options = [f"{t}.{c}" for t, c in all_picked_columns]
+                default_company = next(
+                    (opt for opt in company_options if opt.endswith(".idCompany")),
+                    company_options[0] if company_options else None,
+                )
+                if company_options:
+                    company_choice = st.selectbox(
+                        "Columna de compañía (para filtrar por @id_company)",
+                        company_options,
+                        index=company_options.index(default_company),
+                        key="qb_company_column",
+                    )
+                    qb_company_table, qb_company_col = company_choice.split(".", 1)
+                else:
+                    qb_company_table = qb_company_col = None
+            else:
+                qb_company_table = qb_company_col = None
+
+            qb_time_table = qb_time_col = None
+            if uses_time_window:
+                date_options = [
+                    f"{table}.{col.name}"
+                    for table in qb_tables
+                    for col in tables_by_name[table].columns
+                    if col.data_type in _DATE_COLUMN_TYPES
+                ]
+                if date_options:
+                    time_choice = st.selectbox(
+                        "Columna de fecha (para la ventana de tiempo)",
+                        date_options,
+                        key="qb_time_column",
+                    )
+                    qb_time_table, qb_time_col = time_choice.split(".", 1)
+                else:
+                    st.caption(
+                        "Ninguna de las tablas agregadas tiene una columna de fecha -- "
+                        "agregá una para poder aplicar la ventana de tiempo."
+                    )
+
+            st.markdown("**Campos calculados (opcional)**")
+            for i, calc in enumerate(qb_calculated):
+                col_info, col_action = st.columns([5, 1])
+                target = f"{calc['table']}.{calc['column']}" if calc.get("column") else "*"
+                with col_info:
+                    st.write(f"{calc['function']}({target}) AS {calc['alias']}")
+                with col_action:
+                    if st.button("Quitar", key=f"qb_remove_calc_{i}"):
+                        qb_calculated.pop(i)
+                        st.rerun()
+
+            calc_function = st.selectbox(
+                "Función", list(AGGREGATE_FUNCTIONS), key="qb_calc_function"
+            )
+            calc_table = calc_col = None
+            if calc_function != "COUNT":
+                calc_options = [f"{t}.{c}" for t, c in all_picked_columns]
+                if calc_options:
+                    calc_choice = st.selectbox(
+                        "Sobre la columna", calc_options, key="qb_calc_column"
+                    )
+                    calc_table, calc_col = calc_choice.split(".", 1)
+            calc_alias = st.text_input(
+                "Nombre del campo calculado (alias)", key="qb_calc_alias"
+            )
+            calc_round = None
+            if calc_function in {"SUM", "AVG"}:
+                calc_round_raw = st.number_input(
+                    "Redondear a cuántos decimales (opcional)",
+                    min_value=0,
+                    max_value=10,
+                    value=0,
+                    step=1,
+                    key="qb_calc_round",
+                )
+                calc_round = int(calc_round_raw) if calc_round_raw else None
+            if st.button("Agregar campo calculado"):
+                if not calc_alias.strip():
+                    st.error("Ponele un nombre al campo calculado.")
+                else:
+                    qb_calculated.append(
+                        {
+                            "function": calc_function,
+                            "alias": calc_alias.strip(),
+                            "table": calc_table,
+                            "column": calc_col,
+                            "round_decimals": calc_round,
+                        }
+                    )
+                    st.rerun()
+
+            st.markdown("**Agrupar fecha por período (opcional)**")
+            for i, bucket in enumerate(qb_date_buckets):
+                col_info, col_action = st.columns([5, 1])
+                with col_info:
+                    st.write(
+                        f"DATE_TRUNC({bucket['table']}.{bucket['column']}, {bucket['granularity']}) "
+                        f"AS {bucket['alias']}"
+                    )
+                with col_action:
+                    if st.button("Quitar", key=f"qb_remove_bucket_{i}"):
+                        qb_date_buckets.pop(i)
+                        st.rerun()
+
+            date_bucket_options = [
+                f"{table}.{col.name}"
+                for table in qb_tables
+                for col in tables_by_name[table].columns
+                if col.data_type in _DATE_COLUMN_TYPES
+            ]
+            if date_bucket_options:
+                bucket_choice = st.selectbox(
+                    "Columna de fecha a agrupar", date_bucket_options, key="qb_bucket_column"
+                )
+                bucket_table, bucket_col = bucket_choice.split(".", 1)
+                bucket_granularity = st.selectbox(
+                    "Agrupar por", list(DATE_BUCKET_GRANULARITIES), key="qb_bucket_granularity"
+                )
+                bucket_alias = st.text_input("Nombre del campo (alias)", key="qb_bucket_alias")
+                if st.button("Agregar agrupación de fecha"):
+                    if not bucket_alias.strip():
+                        st.error("Ponele un nombre al campo de fecha agrupada.")
+                    else:
+                        qb_date_buckets.append(
+                            {
+                                "table": bucket_table,
+                                "column": bucket_col,
+                                "granularity": bucket_granularity,
+                                "alias": bucket_alias.strip(),
+                            }
+                        )
+                        st.rerun()
+            else:
+                st.caption("Ninguna de las tablas agregadas tiene una columna de fecha.")
+
+            st.markdown("**Campos condicionales -- CASE WHEN (opcional)**")
+            for i, case in enumerate(qb_case_fields):
+                col_info, col_action = st.columns([5, 1])
+                with col_info:
+                    st.write(
+                        f"CASE WHEN {case['table']}.{case['column']} {case['operator']} "
+                        f"'{case['value']}' THEN '{case['then_value']}' ELSE '{case['else_value']}' "
+                        f"END AS {case['alias']}"
+                    )
+                with col_action:
+                    if st.button("Quitar", key=f"qb_remove_case_{i}"):
+                        qb_case_fields.pop(i)
+                        st.rerun()
+
+            if all_picked_columns:
+                case_options = [f"{t}.{c}" for t, c in all_picked_columns]
+                case_choice = st.selectbox("Columna a evaluar", case_options, key="qb_case_column")
+                case_table, case_col = case_choice.split(".", 1)
+                case_operator = st.selectbox("Operador", list(CASE_OPERATORS), key="qb_case_operator")
+                case_value = st.text_input("Valor de comparación", key="qb_case_value")
+                case_then = st.text_input("Si se cumple, mostrar", key="qb_case_then")
+                case_else = st.text_input("Si no se cumple, mostrar", key="qb_case_else")
+                case_alias = st.text_input("Nombre del campo (alias)", key="qb_case_alias")
+                if st.button("Agregar campo condicional"):
+                    if not case_alias.strip():
+                        st.error("Ponele un nombre al campo condicional.")
+                    else:
+                        qb_case_fields.append(
+                            {
+                                "table": case_table,
+                                "column": case_col,
+                                "operator": case_operator,
+                                "value": case_value,
+                                "then_value": case_then,
+                                "else_value": case_else,
+                                "alias": case_alias.strip(),
+                            }
+                        )
+                        st.rerun()
+
+            st.markdown("**Funciones de texto (opcional)**")
+            for i, text_field in enumerate(qb_text_fields):
+                col_info, col_action = st.columns([5, 1])
+                with col_info:
+                    if text_field["function"] == "CONCAT":
+                        parts = ", ".join(f"{t}.{c}" for t, c in text_field["concat_parts"])
+                        st.write(f"CONCAT({parts}) AS {text_field['alias']}")
+                    else:
+                        st.write(
+                            f"{text_field['function']}({text_field['table']}.{text_field['column']}) "
+                            f"AS {text_field['alias']}"
+                        )
+                with col_action:
+                    if st.button("Quitar", key=f"qb_remove_text_{i}"):
+                        qb_text_fields.pop(i)
+                        st.rerun()
+
+            if all_picked_columns:
+                text_function = st.selectbox("Función de texto", list(TEXT_FUNCTIONS), key="qb_text_function")
+                text_options = [f"{t}.{c}" for t, c in all_picked_columns]
+                text_table = text_col = None
+                text_concat_parts: list[tuple[str, str]] = []
+                if text_function == "CONCAT":
+                    text_concat_choice = st.multiselect(
+                        "Columnas a combinar (en orden)", text_options, key="qb_text_concat"
+                    )
+                    text_concat_parts = [tuple(c.split(".", 1)) for c in text_concat_choice]
+                else:
+                    text_choice = st.selectbox("Sobre la columna", text_options, key="qb_text_column")
+                    text_table, text_col = text_choice.split(".", 1)
+                text_alias = st.text_input("Nombre del campo (alias)", key="qb_text_alias")
+                if st.button("Agregar función de texto"):
+                    if not text_alias.strip():
+                        st.error("Ponele un nombre al campo de texto.")
+                    elif text_function == "CONCAT" and len(text_concat_parts) < 2:
+                        st.error("Elegí al menos dos columnas para combinar con CONCAT.")
+                    else:
+                        qb_text_fields.append(
+                            {
+                                "function": text_function,
+                                "alias": text_alias.strip(),
+                                "table": text_table,
+                                "column": text_col,
+                                "concat_parts": tuple(text_concat_parts),
+                            }
+                        )
+                        st.rerun()
+
+            qb_group_by_selection: list[tuple[str, str]] | None = None
+            raw_columns_for_group_by = [
+                (table, col) for table in qb_tables for col in sorted(qb_columns.get(table, set()))
+            ]
+            if qb_calculated and raw_columns_for_group_by:
+                st.markdown("**Agrupar por (opcional)**")
+                st.caption(
+                    "Al agregar un campo calculado, por defecto se agrupa por todas las "
+                    "columnas seleccionadas arriba. Destildá las que no quieras usar para "
+                    "agrupar -- se van a mostrar igual, con un valor representativo."
+                )
+                qb_group_by_selection = []
+                for table, col in raw_columns_for_group_by:
+                    grouped = st.checkbox(
+                        f"Agrupar por {table}.{col}",
+                        value=True,
+                        key=f"qb_group_by_{table}_{col}",
+                    )
+                    if grouped:
+                        qb_group_by_selection.append((table, col))
+
+            col_generate, col_reset = st.columns([1, 1])
+            with col_generate:
+                if st.button("Generar SQL", type="primary"):
+                    try:
+                        spec = QueryBuilderSpec(
+                            tables=qb_tables,
+                            columns={t: sorted(cols) for t, cols in qb_columns.items()},
+                            joins=[JoinSpec(**j) for j in qb_joins],
+                            filter_by_company=is_per_company,
+                            company_table=qb_company_table,
+                            company_column=qb_company_col,
+                            time_window_table=qb_time_table,
+                            time_window_column=qb_time_col,
+                            calculated_fields=[CalculatedField(**c) for c in qb_calculated],
+                            date_buckets=[DateBucketSpec(**b) for b in qb_date_buckets],
+                            case_fields=[CaseFieldSpec(**c) for c in qb_case_fields],
+                            text_fields=[TextFieldSpec(**t) for t in qb_text_fields],
+                            group_by=qb_group_by_selection,
+                        )
+                        generated_sql = build_sql(spec, settings.gcp_project, settings.bigquery_dataset)
+                    except ValueError as exc:
+                        st.error(str(exc))
+                    else:
+                        st.session_state["wizard_sql"] = generated_sql
+                        st.rerun()
+            with col_reset:
+                if st.button("Reiniciar constructor"):
+                    for key in (
+                        "qb_tables",
+                        "qb_joins",
+                        "qb_columns",
+                        "qb_calculated",
+                        "qb_date_buckets",
+                        "qb_case_fields",
+                        "qb_text_fields",
+                    ):
+                        st.session_state.pop(key, None)
+                    st.rerun()
+
     sql_text = st.text_area(
         "SQL",
         height=200,
