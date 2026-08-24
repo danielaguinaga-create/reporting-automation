@@ -30,6 +30,23 @@ def registry(reports_fixtures_dir) -> ReportRegistry:
     return r
 
 
+def test_run_report_kwargs_translates_entry_fields():
+    """Un solo lugar traduce BatchEntry -> kwargs de run_report, para que
+    run_batch (CLI) y main_entrypoint.handle_push (Pub/Sub) no diverjan
+    campo por campo -- ver hallazgo del code review sobre el bug de
+    'window' que este helper esta pensado para prevenir a futuro."""
+    entry = BatchEntry(
+        report="chats_detalle_rango", client="acme", params={"id_company": "123"}, window="last_7_days"
+    )
+
+    assert entry.run_report_kwargs() == {
+        "report_id": "chats_detalle_rango",
+        "client_id": "acme",
+        "params": {"id_company": "123"},
+        "window": "last_7_days",
+    }
+
+
 def test_load_batch_manifest_parses_entries(tmp_path):
     manifest_path = tmp_path / "batch.yaml"
     manifest_path.write_text(

@@ -285,7 +285,33 @@ def test_build_sql_case_field_escapes_single_quotes():
     )
     sql = build_sql(spec, "proj", "ds")
 
-    assert "t0.UserType = 'O''Brien'" in sql
+    assert "t0.UserType = 'O\\'Brien'" in sql
+
+
+def test_build_sql_case_field_escapes_backslash_before_quote():
+    """BigQuery escapa comillas con backslash, no duplicandolas -- si no se
+    escapa primero la barra invertida de un valor como `a\\`, el `\\'` que
+    resulta de agregarle la comilla de cierre se lee como una comilla
+    literal escapada en vez de cerrar el string, y el literal se queda
+    abierto (ver hallazgo del code review)."""
+    spec = QueryBuilderSpec(
+        tables=["DimUsers"],
+        columns={},
+        case_fields=[
+            CaseFieldSpec(
+                table="DimUsers",
+                column="UserType",
+                operator="=",
+                value="a\\",
+                then_value="si",
+                else_value="no",
+                alias="Categoria",
+            )
+        ],
+    )
+    sql = build_sql(spec, "proj", "ds")
+
+    assert "t0.UserType = 'a\\\\'" in sql
 
 
 def test_build_sql_case_field_rejects_unsupported_operator():

@@ -7,7 +7,7 @@ from pathlib import Path
 os.environ.setdefault("DYLD_LIBRARY_PATH", "/opt/homebrew/lib")
 
 import streamlit as st
-from google.cloud import bigquery, storage
+from google.cloud import bigquery
 from pydantic import ValidationError
 
 from reporting_automation.batch import (
@@ -22,7 +22,7 @@ from reporting_automation.config.loader import load_settings
 from reporting_automation.config.models import DeliveryChannel, OutputFormat, ReportKind
 from reporting_automation.config.registry import ReportRegistry
 from reporting_automation.exceptions import ReportConfigError
-from reporting_automation.gcs_landing import try_land_rendered_files
+from reporting_automation.gcs_landing import try_land_rendered_files_for_project
 from reporting_automation.llm.schema_introspection import get_schema
 from reporting_automation.orchestrator import run_report
 from reporting_automation.query.bigquery_client import BigQueryExecutor
@@ -224,29 +224,50 @@ with tab_run:
                     )
 
                 if result.status == "failure":
+                    st.session_state["run_result_cache"] = None
                     st.error(f"Error ejecutando {report_id!r}: {result.error}")
                 else:
-                    st.success(f"OK: {result.rows} filas x {result.columns} columnas")
-                    for rendered in result.rendered_files:
-                        st.download_button(
-                            label=f"Descargar {rendered.filename}",
-                            data=rendered.local_path.read_bytes(),
-                            file_name=rendered.filename,
-                            key=f"download_{rendered.filename}",
-                        )
-                    gcs_client = storage.Client(project=settings.gcp_project)
-                    gcs_uris, gcs_error = try_land_rendered_files(
-                        gcs_client, settings.trace_bucket, client_id, result.rendered_files
+                    gcs_uris, gcs_error = try_land_rendered_files_for_project(
+                        settings.gcp_project, settings.trace_bucket, client_id, result.rendered_files
                     )
-                    if gcs_error:
-                        st.caption(f"No se pudo copiar a GCS ({settings.trace_bucket}): {gcs_error}")
-                    elif gcs_uris:
-                        st.caption("Copia de auditoría en GCS: " + ", ".join(gcs_uris))
-                    if result.preview is not None:
-                        st.caption(
-                            f"Vista previa (primeras {len(result.preview)} de {result.rows} filas)"
-                        )
-                        st.dataframe(result.preview)
+                    st.session_state["run_result_cache"] = {
+                        "rows": result.rows,
+                        "columns": result.columns,
+                        "rendered_files": result.rendered_files,
+                        "preview": result.preview,
+                        "gcs_uris": gcs_uris,
+                        "gcs_error": gcs_error,
+                    }
+
+            # Fuera del if del boton: un click en "Descargar ..." abajo es en
+            # si mismo otro rerun completo de Streamlit, en el que el boton
+            # "Ejecutar reporte" vuelve a evaluar False. Sin cachear el
+            # resultado en session_state, ese click hacia "desaparecer" el
+            # resto de los botones de descarga -- y para recuperarlos habia
+            # que tocar "Ejecutar reporte" de nuevo, re-corriendo la query
+            # real contra BigQuery y volviendo a subir todo a GCS.
+            cached_result = st.session_state.get("run_result_cache")
+            if cached_result is not None:
+                st.success(f"OK: {cached_result['rows']} filas x {cached_result['columns']} columnas")
+                for rendered in cached_result["rendered_files"]:
+                    st.download_button(
+                        label=f"Descargar {rendered.filename}",
+                        data=rendered.local_path.read_bytes(),
+                        file_name=rendered.filename,
+                        key=f"download_{rendered.filename}",
+                    )
+                if cached_result["gcs_error"]:
+                    st.caption(
+                        f"No se pudo copiar a GCS ({settings.trace_bucket}): {cached_result['gcs_error']}"
+                    )
+                elif cached_result["gcs_uris"]:
+                    st.caption("Copia de auditoría en GCS: " + ", ".join(cached_result["gcs_uris"]))
+                if cached_result["preview"] is not None:
+                    st.caption(
+                        f"Vista previa (primeras {len(cached_result['preview'])} de "
+                        f"{cached_result['rows']} filas)"
+                    )
+                    st.dataframe(cached_result["preview"])
 
 with tab_new:
     st.subheader("Crear reporte nuevo")
@@ -286,7 +307,8 @@ with tab_new:
         if scope == "custom":
             picked = _company_picker(key="wizard_client")
             if picked is not None:
-                new_client_id, _wizard_company_name = picked
+                _wizard_id_company, wizard_company_name = picked
+                new_client_id = slugify(wizard_company_name)
     else:
         scope = "custom"
         st.caption(
@@ -448,8 +470,11 @@ with tab_new:
             for i, calc in enumerate(qb_calculated):
                 col_info, col_action = st.columns([5, 1])
                 target = f"{calc['table']}.{calc['column']}" if calc.get("column") else "*"
+                calc_expr = f"{calc['function']}({target})"
+                if calc.get("round_decimals") is not None:
+                    calc_expr = f"ROUND({calc_expr}, {calc['round_decimals']})"
                 with col_info:
-                    st.write(f"{calc['function']}({target}) AS {calc['alias']}")
+                    st.write(f"{calc_expr} AS {calc['alias']}")
                 with col_action:
                     if st.button("Quitar", key=f"qb_remove_calc_{i}"):
                         qb_calculated.pop(i)
@@ -471,15 +496,20 @@ with tab_new:
             )
             calc_round = None
             if calc_function in {"SUM", "AVG"}:
-                calc_round_raw = st.number_input(
-                    "Redondear a cuántos decimales (opcional)",
-                    min_value=0,
-                    max_value=10,
-                    value=0,
-                    step=1,
-                    key="qb_calc_round",
+                calc_round_enabled = st.checkbox(
+                    "Redondear el resultado", key="qb_calc_round_enabled"
                 )
-                calc_round = int(calc_round_raw) if calc_round_raw else None
+                if calc_round_enabled:
+                    calc_round = int(
+                        st.number_input(
+                            "Decimales",
+                            min_value=0,
+                            max_value=10,
+                            value=2,
+                            step=1,
+                            key="qb_calc_round",
+                        )
+                    )
             if st.button("Agregar campo calculado"):
                 if not calc_alias.strip():
                     st.error("Ponele un nombre al campo calculado.")
@@ -675,16 +705,16 @@ with tab_new:
                         st.rerun()
             with col_reset:
                 if st.button("Reiniciar constructor"):
-                    for key in (
-                        "qb_tables",
-                        "qb_joins",
-                        "qb_columns",
-                        "qb_calculated",
-                        "qb_date_buckets",
-                        "qb_case_fields",
-                        "qb_text_fields",
-                    ):
-                        st.session_state.pop(key, None)
+                    # Barre TODO lo que empiece con "qb_" -- no solo las listas
+                    # de estado (qb_tables/qb_columns/...), sino tambien cada
+                    # checkbox/input individual (qb_col_*, qb_group_by_*,
+                    # qb_calc_alias, etc). Streamlit persiste el valor de un
+                    # widget por su key entre reruns aunque el dato que lo
+                    # respalda se haya limpiado, asi que dejar una sola de
+                    # esas keys viva revive una seleccion "reiniciada".
+                    for key in list(st.session_state.keys()):
+                        if key.startswith("qb_"):
+                            st.session_state.pop(key, None)
                     st.rerun()
 
     sql_text = st.text_area(
@@ -836,22 +866,34 @@ with tab_schedule:
     else:
         schedule_report_id = st.selectbox("Reporte", schedule_report_ids, key="schedule_report_id")
         schedule_report = registry.get(schedule_report_id)
-        picked = _company_picker(key="schedule_client")
-        if picked is not None:
-            schedule_id_company, schedule_company_name = picked
-            schedule_client_id = slugify(schedule_company_name)
+
+        schedule_client_id: str | None = None
+        schedule_id_company: str | None = None
+        if schedule_report.kind == ReportKind.CUSTOM:
+            schedule_client_id = schedule_report.client_id or "general"
+        else:
+            picked = _company_picker(key="schedule_client")
+            if picked is not None:
+                schedule_id_company, schedule_company_name = picked
+                schedule_client_id = slugify(schedule_company_name)
+
+        if schedule_client_id is not None:
             schedule_params = (
                 {"id_company": schedule_id_company}
-                if "id_company" in schedule_report.params_schema
+                if schedule_id_company and "id_company" in schedule_report.params_schema
                 else {}
             )
+            # Las keys de estos dos widgets incluyen schedule_report_id: sin
+            # eso, cambiar de reporte sin todavia haber agregado la entrada
+            # deja el valor tipeado para el reporte anterior pegado en
+            # session_state y lo termina guardando para el reporte nuevo.
             schedule_window: str | None = None
             if any(name in schedule_report.params_schema for name in _WINDOW_PARAM_NAMES):
                 schedule_window = st.selectbox(
                     "Ventana de tiempo",
                     list(WINDOW_PRESETS.keys()),
                     format_func=lambda k: WINDOW_PRESETS[k],
-                    key="schedule_window",
+                    key=f"schedule_window_{schedule_report_id}",
                 )
                 st.caption(
                     "Se recalcula en cada corrida (ej. 'Mes anterior' siempre resuelve el mes "
@@ -866,7 +908,7 @@ with tab_schedule:
                         "Dejalo vacío para usar los destinatarios por defecto del reporte "
                         f"({', '.join(schedule_report.default_recipients) or 'ninguno configurado'})."
                     ),
-                    key="schedule_recipients",
+                    key=f"schedule_recipients_{schedule_report_id}",
                 )
                 schedule_recipients = parse_recipients_block(schedule_recipients_raw)
             else:

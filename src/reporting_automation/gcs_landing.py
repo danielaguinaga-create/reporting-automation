@@ -3,6 +3,8 @@ from __future__ import annotations
 from datetime import date
 from typing import Protocol
 
+from google.cloud import storage
+
 from reporting_automation.rendering.base import RenderedFile
 
 
@@ -66,3 +68,28 @@ def try_land_rendered_files(
     except Exception as exc:  # noqa: BLE001 - se reporta, no debe tumbar la corrida
         return [], str(exc)
     return uris, None
+
+
+def try_land_rendered_files_for_project(
+    project: str,
+    bucket_name: str | None,
+    client_id: str,
+    rendered_files: list[RenderedFile],
+    run_date: date | None = None,
+) -> tuple[list[str], str | None]:
+    """Como `try_land_rendered_files`, pero tambien construye el `storage.Client`.
+
+    `storage.Client(...)` resuelve credenciales al construirse, no solo al
+    subir -- si eso falla (ej. credenciales invalidas en ese entorno), antes
+    ese error escapaba sin capturar porque el cliente se creaba afuera de
+    cualquier try/except, tumbando la corrida despues de que el reporte ya
+    se genero con exito. Centralizar la construccion aca evita repetir el
+    mismo try/except en cada llamador (CLI `run`/`run-batch`, UI).
+    """
+    if not bucket_name:
+        return [], None
+    try:
+        client = storage.Client(project=project)
+    except Exception as exc:  # noqa: BLE001 - misma politica que try_land_rendered_files
+        return [], str(exc)
+    return try_land_rendered_files(client, bucket_name, client_id, rendered_files, run_date)

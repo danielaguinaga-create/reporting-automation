@@ -404,6 +404,36 @@ def test_wizard_custom_scope_uses_bigquery_company_picker(monkeypatch):
     assert set(wizard_client_selectbox.options) == {"Protec", "Avanza Seguros"}
 
 
+def test_wizard_custom_scope_saves_slugified_client_id_not_raw_idcompany(monkeypatch):
+    """El client_id guardado debe ser un slug legible (protec), como usan
+    todos los reportes custom existentes -- no el idCompany crudo de
+    BigQuery, que rompe la convencion de run --client/GCS landing paths."""
+    monkeypatch.setattr("google.cloud.bigquery.Client", FakeBigQueryClient)
+
+    calls = []
+
+    def fake_save_new_report(reports_dir, form):
+        calls.append(form)
+        return Path("/tmp/fake/custom/x.yaml"), Path("/tmp/fake/custom/x.sql")
+
+    monkeypatch.setattr("reporting_automation.report_wizard.save_new_report", fake_save_new_report)
+
+    at = AppTest.from_file(APP_PATH)
+    at.run()
+
+    at.text_input(key="wizard_name").set_value("Nuevo Reporte Test").run()
+    at.text_area(key="wizard_sql").set_value("SELECT 1;").run()
+    at.radio(key="wizard_scope").set_value("custom").run()
+    at.selectbox(key="wizard_client").select("498cb81c5ba7325f").run()
+
+    save_button = next(b for b in at.button if b.label == "Guardar como plantilla")
+    save_button.click().run()
+
+    assert not at.exception
+    assert len(calls) == 1
+    assert calls[0].client_id == "protec"
+
+
 def test_schedule_tab_lists_existing_manifest_entries(monkeypatch):
     monkeypatch.setattr("google.cloud.bigquery.Client", FakeBigQueryClient)
     from reporting_automation.batch import BatchEntry
@@ -489,7 +519,9 @@ def test_schedule_tab_report_with_delivery_channels_shows_and_saves_recipients(m
 
     at.selectbox(key="schedule_report_id").select("chats_detalle").run()
     at.selectbox(key="schedule_client").select("498cb81c5ba7325f").run()
-    at.text_area(key="schedule_recipients").set_value("ops@meetingdoctors.com\ncliente@example.com").run()
+    at.text_area(key="schedule_recipients_chats_detalle").set_value(
+        "ops@meetingdoctors.com\ncliente@example.com"
+    ).run()
     at.selectbox(key="schedule_freq").select("0 6 * * *").run()
 
     add_button = next(b for b in at.button if b.label == "Agregar a la programación")
@@ -518,7 +550,7 @@ def test_schedule_tab_windowed_report_shows_and_saves_window_preset(monkeypatch)
 
     at.selectbox(key="schedule_report_id").select("chats_detalle_rango").run()
     at.selectbox(key="schedule_client").select("498cb81c5ba7325f").run()
-    at.selectbox(key="schedule_window").select("last_7_days").run()
+    at.selectbox(key="schedule_window_chats_detalle_rango").select("last_7_days").run()
     at.selectbox(key="schedule_freq").select("0 6 * * *").run()
 
     add_button = next(b for b in at.button if b.label == "Agregar a la programación")
@@ -528,6 +560,70 @@ def test_schedule_tab_windowed_report_shows_and_saves_window_preset(monkeypatch)
     assert len(saved) == 1
     assert saved[0][0].report == "chats_detalle_rango"
     assert saved[0][0].window == "last_7_days"
+
+
+def test_schedule_tab_switching_report_does_not_leak_previous_recipients(monkeypatch):
+    """Tipear destinatarios para el reporte A y despues cambiar a un reporte
+    B (sin agregar la entrada de A) no debe dejar el destinatario de A
+    pegado en el campo de B -- ver hallazgo del code review sobre keys de
+    widget no scopeadas por reporte."""
+    monkeypatch.setattr("google.cloud.bigquery.Client", FakeBigQueryClient)
+
+    from reporting_automation.config.registry import ReportRegistry
+
+    original_get = ReportRegistry.get
+
+    def patched_get(self, report_id):
+        report = original_get(self, report_id)
+        if report_id in ("chats_detalle", "chats_detalle_rango"):
+            return report.model_copy(update={"delivery_channels": [DeliveryChannel.EMAIL]})
+        return report
+
+    monkeypatch.setattr(ReportRegistry, "get", patched_get)
+
+    at = AppTest.from_file(APP_PATH)
+    at.run()
+
+    at.selectbox(key="schedule_report_id").select("chats_detalle").run()
+    at.selectbox(key="schedule_client").select("498cb81c5ba7325f").run()
+    at.text_area(key="schedule_recipients_chats_detalle").set_value("clientA@example.com").run()
+
+    at.selectbox(key="schedule_report_id").select("chats_detalle_rango").run()
+
+    assert not at.exception
+    recipients_widget = at.text_area(key="schedule_recipients_chats_detalle_rango")
+    assert recipients_widget.value in ("", None)
+
+
+def test_schedule_tab_custom_report_with_client_id_skips_company_picker(monkeypatch):
+    """Un reporte 'custom' ya tiene su cliente fijo (report.client_id) -- no
+    tiene sentido pedirle al usuario que elija una compañia de BigQuery sin
+    relacion alguna con ese reporte, como ya hace 'Correr un reporte'."""
+    monkeypatch.setattr("google.cloud.bigquery.Client", FakeBigQueryClient)
+
+    monkeypatch.setattr("reporting_automation.batch.load_batch_manifest", lambda path: [])
+    saved = []
+    monkeypatch.setattr(
+        "reporting_automation.batch.save_batch_manifest",
+        lambda path, entries: saved.append(list(entries)),
+    )
+
+    at = AppTest.from_file(APP_PATH)
+    at.run()
+
+    at.selectbox(key="schedule_report_id").select("pepsico_derivaciones").run()
+
+    assert not at.exception
+    with pytest.raises(KeyError):
+        at.selectbox(key="schedule_client")
+
+    at.selectbox(key="schedule_freq").select("0 6 * * *").run()
+    add_button = next(b for b in at.button if b.label == "Agregar a la programación")
+    add_button.click().run()
+
+    assert not at.exception
+    assert len(saved) == 1
+    assert saved[0][0].client == "pepsico"
 
 
 def test_schedule_tab_client_picker_comes_from_bigquery_not_yaml(monkeypatch):

@@ -10,6 +10,7 @@ from flask import Flask, request
 from google.cloud import bigquery, secretmanager, storage
 from googleapiclient.discovery import build as build_drive_service
 
+from reporting_automation.batch import BatchEntry
 from reporting_automation.config.client_registry import ClientRegistry
 from reporting_automation.config.loader import load_settings
 from reporting_automation.config.models import DeliveryChannel
@@ -60,13 +61,22 @@ def handle_push():
 
     report_id = payload.get("reporte")
     client_id = payload.get("cliente")
-    params = payload.get("params") or {}
-    receptores = payload.get("receptores") or []
-    window = payload.get("window")
 
     if not report_id or not client_id:
         logger.error("Payload sin 'reporte'/'cliente': %s", payload)
         return ("Bad Request: 'reporte' y 'cliente' son requeridos", 400)
+
+    # Se construye el mismo BatchEntry que arma run-batch (CLI) para que la
+    # traduccion a los kwargs de run_report (via `run_report_kwargs()`) sea
+    # una sola, compartida entre los dos caminos que ejecutan un reporte
+    # programado -- ver batch.BatchEntry.run_report_kwargs.
+    entry = BatchEntry(
+        report=report_id,
+        client=client_id,
+        params=payload.get("params") or {},
+        recipients=payload.get("receptores") or [],
+        window=payload.get("window"),
+    )
 
     settings = load_settings()
     registry = ReportRegistry()
@@ -78,14 +88,11 @@ def handle_push():
 
     with tempfile.TemporaryDirectory() as tmp_dir:
         result = run_report(
-            report_id=report_id,
-            client_id=client_id,
-            params=params,
+            **entry.run_report_kwargs(),
             output_dir=tmp_dir,
             registry=registry,
             executor=executor,
             client_registry=client_registry,
-            window=window,
         )
 
         if result.status == "failure":
@@ -119,7 +126,7 @@ def handle_push():
             "client_id": client_id,
             "rows": result.rows,
             "gcs_uris": gcs_uris,
-            "receptores": receptores,
+            "receptores": entry.recipients,
         },
     )
 
@@ -140,7 +147,7 @@ def handle_push():
                 DeliveryChannel.EMAIL: EmailDelivery(secret_manager),
                 DeliveryChannel.GDRIVE: GDriveDelivery(drive_service, settings.gdrive_root_folder_id),
             }
-            recipients = resolve_recipients(report, receptores)
+            recipients = resolve_recipients(report, entry.recipients)
             delivery_results = dispatch_delivery(
                 report, result.rendered_files, recipients, client_id, delivery_factories
             )

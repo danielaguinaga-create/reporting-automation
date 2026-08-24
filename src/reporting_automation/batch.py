@@ -27,6 +27,20 @@ class BatchEntry(BaseModel):
     `--schedule` global (ver cli.py) -- no afecta `run_batch`, que corre
     todas las entradas de una sola vez sin importar su frecuencia."""
 
+    def run_report_kwargs(self) -> dict[str, Any]:
+        """Traduce esta entrada a los kwargs de `orchestrator.run_report` que
+        le corresponden (report_id/client_id/params/window) -- un solo lugar
+        para que `run_batch` (CLI) y `main_entrypoint.handle_push` (Pub/Sub,
+        Fase 3) no diverjan campo por campo. Ya paso una vez: `window` se
+        agrego a esta clase pero quedo sin propagar en el payload de Pub/Sub
+        y en el entrypoint hasta que una revision de codigo lo encontro."""
+        return {
+            "report_id": self.report,
+            "client_id": self.client,
+            "params": self.params,
+            "window": self.window,
+        }
+
 
 def load_batch_manifest(path: str | Path) -> list[BatchEntry]:
     """Carga un manifiesto (ej. `config/monthly_batch.yaml`): lista de
@@ -120,15 +134,12 @@ def run_batch(
     for entry in entries:
         entry_output_dir = Path(output_dir) / entry.client
         result = run_report(
-            report_id=entry.report,
-            client_id=entry.client,
-            params=entry.params,
+            **entry.run_report_kwargs(),
             output_dir=entry_output_dir,
             registry=registry,
             executor=executor,
             client_registry=client_registry,
             run_date=run_date,
-            window=entry.window,
         )
         results.append(result)
     return results

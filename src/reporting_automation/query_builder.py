@@ -135,7 +135,13 @@ def _quote_table(project: str, dataset: str, table: str) -> str:
 
 
 def _escape_literal(value: str) -> str:
-    return value.replace("'", "''")
+    """Escapa un literal de texto para BigQuery Standard SQL, que usa
+    backslash (`\\'`) y no duplicado de comillas (`''`, la convencion ANSI
+    de otros motores) -- duplicar comillas no cierra el literal como
+    corresponde en BigQuery, asi que hay que escapar la barra invertida
+    primero para no dejar un `\\` suelto justo antes de la comilla que se
+    agrega despues."""
+    return value.replace("\\", "\\\\").replace("'", "\\'")
 
 
 def build_sql(spec: QueryBuilderSpec, project: str, dataset: str) -> str:

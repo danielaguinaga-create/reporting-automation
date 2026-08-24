@@ -28,7 +28,10 @@ from reporting_automation.delivery.dispatch import dispatch_delivery, resolve_re
 from reporting_automation.delivery.email_delivery import EmailDelivery
 from reporting_automation.delivery.gdrive_delivery import GDriveDelivery
 from reporting_automation.exceptions import ClientConfigError, ReportConfigError
-from reporting_automation.gcs_landing import try_land_rendered_files
+from reporting_automation.gcs_landing import (
+    try_land_rendered_files,
+    try_land_rendered_files_for_project,
+)
 from reporting_automation.llm.anthropic_client import (
     DEFAULT_MODEL,
     AnthropicChatModel,
@@ -165,9 +168,8 @@ def run(
     for rendered in result.rendered_files:
         typer.echo(f"  - {rendered.format.value}: {rendered.local_path}")
 
-    gcs_client = storage.Client(project=settings.gcp_project)
-    gcs_uris, gcs_error = try_land_rendered_files(
-        gcs_client, settings.trace_bucket, client, result.rendered_files
+    gcs_uris, gcs_error = try_land_rendered_files_for_project(
+        settings.gcp_project, settings.trace_bucket, client, result.rendered_files
     )
     if gcs_error:
         typer.echo(f"Aviso: no se pudo copiar a GCS ({settings.trace_bucket}): {gcs_error}", err=True)
@@ -450,15 +452,23 @@ def run_batch_cmd(
 
     results = run_batch(entries, output_dir, registry, executor, client_registry)
 
-    gcs_client = storage.Client(project=settings.gcp_project)
+    try:
+        gcs_client = storage.Client(project=settings.gcp_project)
+        gcs_construction_error = None
+    except Exception as exc:  # noqa: BLE001 - se reporta por entrada, no debe tumbar el batch
+        gcs_client = None
+        gcs_construction_error = str(exc)
     delivery_factories = _build_delivery_factories(settings) if deliver else None
 
     for entry, result in zip(entries, results):
         if result.status == "success":
             typer.echo(f"[OK]    {result.report_id} ({result.client_id}): {result.rows} filas")
-            gcs_uris, gcs_error = try_land_rendered_files(
-                gcs_client, settings.trace_bucket, entry.client, result.rendered_files
-            )
+            if gcs_client is not None:
+                gcs_uris, gcs_error = try_land_rendered_files(
+                    gcs_client, settings.trace_bucket, entry.client, result.rendered_files
+                )
+            else:
+                gcs_uris, gcs_error = [], gcs_construction_error
             if gcs_error:
                 typer.echo(f"        Aviso: no se pudo copiar a GCS: {gcs_error}", err=True)
             for uri in gcs_uris:
