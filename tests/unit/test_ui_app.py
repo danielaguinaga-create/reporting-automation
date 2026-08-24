@@ -418,9 +418,42 @@ def test_schedule_tab_add_entry_saves_manifest_and_shows_gcloud_command(monkeypa
     assert saved[0][0].client == "protec"
     assert saved[0][0].schedule == "0 6 * * *"
     assert saved[0][0].params == {"id_company": "498cb81c5ba7325f"}
+    assert saved[0][0].window is None
     assert len(at.success) == 1
     assert len(at.code) == 1
     assert "chats_detalle_protec" in at.code[0].value
+    with pytest.raises(KeyError):
+        at.selectbox(key="schedule_window")
+
+
+def test_schedule_tab_windowed_report_shows_and_saves_window_preset(monkeypatch):
+    """chats_detalle_rango declara start_date/end_date -- programarlo debe
+    pedir una ventana de tiempo, para que no falle en silencio al ejecutarse
+    (ver gap: nadie resolvia start_date/end_date para reportes programados)."""
+    monkeypatch.setattr("google.cloud.bigquery.Client", FakeBigQueryClient)
+
+    monkeypatch.setattr("reporting_automation.batch.load_batch_manifest", lambda path: [])
+    saved = []
+    monkeypatch.setattr(
+        "reporting_automation.batch.save_batch_manifest",
+        lambda path, entries: saved.append(list(entries)),
+    )
+
+    at = AppTest.from_file(APP_PATH)
+    at.run()
+
+    at.selectbox(key="schedule_report_id").select("chats_detalle_rango").run()
+    at.selectbox(key="schedule_client").select("498cb81c5ba7325f").run()
+    at.selectbox(key="schedule_window").select("last_7_days").run()
+    at.selectbox(key="schedule_freq").select("0 6 * * *").run()
+
+    add_button = next(b for b in at.button if b.label == "Agregar a la programación")
+    add_button.click().run()
+
+    assert not at.exception
+    assert len(saved) == 1
+    assert saved[0][0].report == "chats_detalle_rango"
+    assert saved[0][0].window == "last_7_days"
 
 
 def test_schedule_tab_client_picker_comes_from_bigquery_not_yaml(monkeypatch):

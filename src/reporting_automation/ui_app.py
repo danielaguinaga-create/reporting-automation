@@ -788,9 +788,10 @@ with tab_schedule:
         for i, entry in enumerate(batch_entries):
             freq_label = _SCHEDULE_PRESETS.get(entry.schedule, entry.schedule)
             freq_text = freq_label or "Mensual (default de generate-scheduler-jobs, dia 1 6am)"
+            window_text = f" — {WINDOW_PRESETS.get(entry.window, entry.window)}" if entry.window else ""
             col_info, col_action = st.columns([5, 1])
             with col_info:
-                st.write(f"**{entry.report}** → {entry.client} — {freq_text}")
+                st.write(f"**{entry.report}** → {entry.client} — {freq_text}{window_text}")
             with col_action:
                 if st.button("Quitar", key=f"remove_schedule_{i}"):
                     batch_entries.pop(i)
@@ -816,6 +817,18 @@ with tab_schedule:
                 if "id_company" in schedule_report.params_schema
                 else {}
             )
+            schedule_window: str | None = None
+            if any(name in schedule_report.params_schema for name in _WINDOW_PARAM_NAMES):
+                schedule_window = st.selectbox(
+                    "Ventana de tiempo",
+                    list(WINDOW_PRESETS.keys()),
+                    format_func=lambda k: WINDOW_PRESETS[k],
+                    key="schedule_window",
+                )
+                st.caption(
+                    "Se recalcula en cada corrida (ej. 'Mes anterior' siempre resuelve el mes "
+                    "anterior a la fecha en que corre, no una fecha fija de hoy)."
+                )
             freq_choice = st.selectbox(
                 "Frecuencia",
                 list(_SCHEDULE_PRESETS.keys()),
@@ -838,6 +851,7 @@ with tab_schedule:
                         report=schedule_report_id,
                         client=schedule_client_id,
                         params=schedule_params,
+                        window=schedule_window,
                         schedule=cron,
                     )
                     batch_entries.append(new_entry)
