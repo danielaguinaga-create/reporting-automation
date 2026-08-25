@@ -641,9 +641,11 @@ es el bloqueo -- el permiso de Cloud Build si lo es.
 
 Capa de UI del diagrama, alcance v1: elegir reporte + cliente (+ parámetros)
 desde un formulario web, correrlo contra BigQuery real, y descargar el
-archivo. **No** dispara delivery (correo/GDrive) desde la UI — eso sigue
-siendo solo CLI (`run --deliver`), para que una herramienta usada por varias
-personas no pueda mandarle algo real a un cliente por accidente.
+archivo. **No** dispara delivery (correo/GDrive) desde la UI, sin
+excepción — eso solo pasa desde la CLI (`run --deliver`) o, una vez
+desplegada, automáticamente desde Fase 3 (Pub/Sub → Cloud Run, ver esa
+sección más arriba), para que una herramienta usada por varias personas no
+pueda mandarle algo real a un cliente por accidente.
 
 - `src/reporting_automation/ui_app.py`: un solo script de Streamlit, reusa
   `ReportRegistry`, `orchestrator.run_report`, `BigQueryExecutor` tal cual —

@@ -92,7 +92,8 @@ def _company_picker(key: str) -> tuple[str, str] | None:
 st.title("Reporting Automation")
 st.caption(
     "Corre un reporte contra BigQuery y descarga el resultado. "
-    "No manda correos ni sube a Drive -- eso sigue siendo solo desde la CLI (`run --deliver`)."
+    "Esta pantalla nunca manda correos ni sube a Drive -- eso solo pasa desde la CLI "
+    "(`run --deliver`) o, cuando se despliegue, automaticamente por Fase 3 (Pub/Sub)."
 )
 
 tab_run, tab_new, tab_schedule = st.tabs(
