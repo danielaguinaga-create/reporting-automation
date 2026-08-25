@@ -77,3 +77,27 @@ def test_dispatch_delivery_missing_factory_for_implemented_channel_returns_faile
     report = _report(delivery_channels=[DeliveryChannel.EMAIL])
     results = dispatch_delivery(report, [], ["a@b.com"], "acme", {})
     assert results[0].status == "failed"
+
+
+class BoomDelivery:
+    def send(self, files, report, client_id, recipients) -> DeliveryResult:
+        raise RuntimeError("boom")
+
+
+def test_dispatch_delivery_one_channel_crashing_does_not_abort_the_others():
+    """Un canal que levanta una excepcion inesperada (ej. secret mal
+    formado, archivo inaccesible) no debe abortar dispatch_delivery entero
+    -- los canales restantes tienen que seguir intentandose (ver hallazgo
+    del code review)."""
+    gdrive = FakeDelivery(DeliveryChannel.GDRIVE)
+    report = _report(delivery_channels=[DeliveryChannel.EMAIL, DeliveryChannel.GDRIVE])
+
+    results = dispatch_delivery(
+        report, [], ["a@b.com"], "acme",
+        {DeliveryChannel.EMAIL: BoomDelivery(), DeliveryChannel.GDRIVE: gdrive},
+    )
+
+    assert [r.status for r in results] == ["failed", "sent"]
+    assert results[0].channel == DeliveryChannel.EMAIL
+    assert "boom" in results[0].detail
+    assert gdrive.calls == [([], "r1", "acme", ["a@b.com"])]

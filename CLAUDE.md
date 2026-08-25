@@ -103,10 +103,14 @@ each entry to `output_dir/<client>/`, never directly to `output_dir` — a
 otherwise silently overwrite one client's file with the other's (this
 happened for real during development).
 
-**Delivery (email/GDrive) is opt-in and CLI-only** (`--deliver` flag on
-`run`/`run-batch`). The Streamlit UI can never trigger delivery — deliberate,
-so a multi-user web form can't accidentally email/upload something to a
-real client.
+**Delivery (email/GDrive) fires from two places, never from the UI.** The
+CLI needs an explicit opt-in (`--deliver` flag on `run`/`run-batch`).
+`main_entrypoint.py` (Fase 3, not deployed) has no such flag — it dispatches
+delivery unconditionally whenever the pushed report's `delivery_channels` is
+non-empty, since a Pub/Sub push has no interactive user to ask. The
+Streamlit UI can never trigger delivery either way — deliberate, so a
+multi-user web form can't accidentally email/upload something to a real
+client.
 
 **`ask.py`** is a separate natural-language-to-SQL path (Anthropic LLM +
 `llm/sql_safety.py` guard against unsafe generated SQL) that also calls
@@ -142,3 +146,11 @@ gap.
 - `BigQueryExecutor.run()` requires every name in `params_schema` to be
   present in resolved params or it raises — there's no concept of an
   optional query param.
+- `main_entrypoint.py` builds its registries/BigQuery client/delivery
+  factories lazily on first request (`_get_state()`, a module-level
+  singleton), not at import time, so tests can mock `bigquery.Client`/
+  `storage.Client`/`load_settings` before the first request. Any test
+  touching `handle_push` must reset `main_entrypoint._state = None` in its
+  fixture (see `tests/unit/test_main_entrypoint.py`'s `_patch_gcp_clients`)
+  or it'll reuse whatever state the first test in the process happened to
+  build.

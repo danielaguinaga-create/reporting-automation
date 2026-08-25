@@ -2,12 +2,14 @@
 #
 # Este archivo es codigo/config, seguro de tener en el repo. Lo que NO se
 # hizo (a proposito, ver README seccion Roadmap/Fase 4): crear el trigger de
-# Cloud Build real, que requiere un repo git con un remoto conectado
-# (GitHub/GitLab/Cloud Source Repos) -- este proyecto ni siquiera es un repo
-# git todavia. Sin eso, un trigger no tiene de donde disparar.
+# Cloud Build real. El repo YA tiene remoto conectado (GitHub, ver
+# `git remote -v`) -- lo que falta es correr
+# `gcloud builds triggers create github ...` apuntando a el, y eso a su vez
+# necesita permisos de Cloud Build (ni `cloudbuild.builds.create` esta
+# otorgado hoy -- confirmar antes de intentar cualquier `gcloud builds`).
 #
 # Uso manual mientras no haya trigger (build+deploy a mano, revisando cada
-# paso primero):
+# paso primero, y solo si ya se confirmo el permiso de Cloud Build):
 #   gcloud builds submit --config=cloudbuild.yaml --project=data-prd-424213
 
 steps:
@@ -44,6 +46,12 @@ steps:
   - id: deploy
     name: gcr.io/google.com/cloudsdktool/cloud-sdk
     entrypoint: gcloud
+    # --service-account explicita: sin ella, gcloud usa la default compute
+    # SA igual, pero de forma implicita -- eso llevo a un mismatch real con
+    # el trigger de Eventarc (ver README, seccion Fase 3), que necesita
+    # saber exactamente que SA invoca el servicio para poder darle
+    # roles/run.invoker. iam.serviceAccounts.create no esta otorgado hoy,
+    # asi que esta sigue siendo la unica SA disponible para esto.
     args:
       - run
       - deploy
@@ -51,6 +59,7 @@ steps:
       - --image=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/reporting-automation:$SHORT_SHA
       - --region=${_REGION}
       - --no-allow-unauthenticated
+      - --service-account=901461160778-compute@developer.gserviceaccount.com
     waitFor: ["push"]
 
 substitutions:

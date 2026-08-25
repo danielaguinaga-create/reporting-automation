@@ -10,6 +10,16 @@ from reporting_automation.delivery.base import DeliveryResult
 from reporting_automation.rendering.base import RenderedFile
 from reporting_automation.secrets.secret_manager import SecretManagerClient
 
+# Puerto convencional de SMTP con TLS implicito (ej. relays de Gmail/muchos
+# proveedores corporativos) -- ahi hay que conectar directo por SSL, no
+# plaintext-y-luego-STARTTLS como en el resto de los puertos (587/25).
+_SMTP_SSL_PORT = 465
+
+# Sin esto, conectar a un puerto que espera un protocolo distinto al que
+# asumimos (ej. TLS implicito en 465 conectado como si fuera STARTTLS)
+# cuelga la conexion para siempre -- smtplib no tiene timeout por defecto.
+_SMTP_TIMEOUT_SECONDS = 30
+
 
 class EmailDelivery:
     """Envia los archivos generados como adjuntos por SMTP.
@@ -39,28 +49,30 @@ class EmailDelivery:
 
         try:
             smtp_config = self._secret_manager.get_json_secret(self._secret_id)
-        except Exception as exc:  # noqa: BLE001 - se reporta, no se traga
-            return DeliveryResult(
-                channel=DeliveryChannel.EMAIL,
-                status="failed",
-                detail=f"no se pudo leer el secret {self._secret_id!r}: {exc}",
-            )
 
-        message = MIMEMultipart()
-        message["From"] = smtp_config["from_address"]
-        message["To"] = ", ".join(recipients)
-        message["Subject"] = f"{report.name} - {client_id}"
-        message.attach(MIMEText(f"Adjunto {report.name} para {client_id}.", "plain"))
+            # Todo lo que sigue -- armar el mensaje, adjuntar archivos, y
+            # mandarlo por SMTP -- va en el mismo try/except: un secret mal
+            # formado (falta from_address) o un archivo renderizado
+            # inaccesible no debe escapar sin controlar, porque eso
+            # tumbaria dispatch_delivery entero y ni siquiera se intentaria
+            # el resto de los canales de entrega del reporte.
+            message = MIMEMultipart()
+            message["From"] = smtp_config["from_address"]
+            message["To"] = ", ".join(recipients)
+            message["Subject"] = f"{report.name} - {client_id}"
+            message.attach(MIMEText(f"Adjunto {report.name} para {client_id}.", "plain"))
 
-        for rendered in files:
-            with open(rendered.local_path, "rb") as f:
-                attachment = MIMEApplication(f.read(), Name=rendered.filename)
-            attachment["Content-Disposition"] = f'attachment; filename="{rendered.filename}"'
-            message.attach(attachment)
+            for rendered in files:
+                with open(rendered.local_path, "rb") as f:
+                    attachment = MIMEApplication(f.read(), Name=rendered.filename)
+                attachment["Content-Disposition"] = f'attachment; filename="{rendered.filename}"'
+                message.attach(attachment)
 
-        try:
-            with smtplib.SMTP(smtp_config["host"], int(smtp_config["port"])) as server:
-                server.starttls()
+            host, port = smtp_config["host"], int(smtp_config["port"])
+            server_cls = smtplib.SMTP_SSL if port == _SMTP_SSL_PORT else smtplib.SMTP
+            with server_cls(host, port, timeout=_SMTP_TIMEOUT_SECONDS) as server:
+                if port != _SMTP_SSL_PORT:
+                    server.starttls()
                 server.login(smtp_config["user"], smtp_config["password"])
                 server.send_message(message)
         except Exception as exc:  # noqa: BLE001 - se reporta, no se traga

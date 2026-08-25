@@ -60,7 +60,14 @@ class GDriveDelivery:
             f"'{parent_id}' in parents and name = '{safe_name}' "
             "and mimeType = 'application/vnd.google-apps.folder' and trashed = false"
         )
-        result = self._drive.files().list(q=query, fields="files(id, name)").execute()
+        # orderBy=createdTime: si dos invocaciones concurrentes (reintento
+        # de Pub/Sub superpuesto con la corrida original) alguna vez llegan
+        # a crear dos carpetas con el mismo nombre (list-then-create sin
+        # lock), que todas las llamadas futuras converjan en la misma (la
+        # mas vieja) en vez de en cualquiera de las duplicadas al azar.
+        result = self._drive.files().list(
+            q=query, fields="files(id, name)", orderBy="createdTime"
+        ).execute()
         existing = result.get("files", [])
         if existing:
             return existing[0]["id"], True
@@ -76,7 +83,9 @@ class GDriveDelivery:
     def _find_file(self, filename: str, folder_id: str) -> dict | None:
         safe_name = _escape_drive_query(filename)
         query = f"'{folder_id}' in parents and name = '{safe_name}' and trashed = false"
-        result = self._drive.files().list(q=query, fields="files(id, name, webViewLink)").execute()
+        result = self._drive.files().list(
+            q=query, fields="files(id, name, webViewLink)", orderBy="createdTime"
+        ).execute()
         matches = result.get("files", [])
         return matches[0] if matches else None
 

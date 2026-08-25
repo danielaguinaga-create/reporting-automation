@@ -21,7 +21,7 @@ class FakeFilesResource:
         self.created_files: list[dict] = []
         self.updated_files: list[tuple] = []
 
-    def list(self, q: str, fields: str):
+    def list(self, q: str, fields: str, orderBy: str | None = None):
         if "mimeType = 'application/vnd.google-apps.folder'" in q:
             for name, folder_id in self.existing_folders.items():
                 if f"name = '{name}'" in q:
@@ -113,9 +113,30 @@ def test_send_updates_existing_file_instead_of_duplicating(tmp_path):
     assert files_resource.updated_files[0][0] == "existing-id"
 
 
+def test_get_or_create_folder_requests_created_time_ordering():
+    """Si una carrera (reintento de Pub/Sub superpuesto) ya creo carpetas
+    duplicadas con el mismo nombre, todas las llamadas deben converger en
+    la misma (la mas vieja) en vez de en cualquiera al azar -- pedirle a la
+    API que ordene por createdTime es lo que permite eso (ver hallazgo del
+    code review sobre la carrera de list-then-create)."""
+    captured_kwargs = {}
+
+    class RecordingFilesResource(FakeFilesResource):
+        def list(self, q, fields, orderBy=None):
+            captured_kwargs["orderBy"] = orderBy
+            return super().list(q, fields, orderBy)
+
+    drive_service = FakeDriveService(RecordingFilesResource())
+    delivery = GDriveDelivery(drive_service, root_folder_id="root123", run_date=date(2026, 7, 1))
+
+    delivery._get_or_create_folder("acme", "root123")
+
+    assert captured_kwargs["orderBy"] == "createdTime"
+
+
 def test_send_drive_api_error_returns_failed_not_exception(tmp_path):
     class BoomFilesResource(FakeFilesResource):
-        def list(self, q, fields):
+        def list(self, q, fields, orderBy=None):
             raise RuntimeError("Drive API error")
 
     drive_service = FakeDriveService(BoomFilesResource())

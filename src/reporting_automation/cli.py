@@ -23,9 +23,9 @@ from reporting_automation.config.models import (
 )
 from reporting_automation.config.registry import ReportRegistry
 from reporting_automation.config.scaffold import scaffold_client, scaffold_report
-from reporting_automation.delivery.base import Delivery, DeliveryResult
+from reporting_automation.delivery.base import DeliveryResult
 from reporting_automation.delivery.dispatch import dispatch_delivery, resolve_recipients
-from reporting_automation.delivery.email_delivery import EmailDelivery
+from reporting_automation.delivery.factory import build_delivery_factories
 from reporting_automation.delivery.gdrive_delivery import GDriveDelivery
 from reporting_automation.exceptions import ClientConfigError, ReportConfigError
 from reporting_automation.gcs_landing import (
@@ -80,18 +80,6 @@ def _parse_param_schema(raw: list[str]) -> dict[str, str]:
             raise typer.BadParameter(str(exc)) from exc
         schema[name] = bq_type
     return schema
-
-
-def _build_delivery_factories(settings: Settings) -> dict[DeliveryChannel, Delivery]:
-    """Construye los `Delivery` reales (SMTP via Secret Manager, GDrive via
-    ADC) -- no toca red hasta que `.send()` se invoque de verdad."""
-    secret_manager = SecretManagerClient(secretmanager.SecretManagerServiceClient(), settings.gcp_project)
-    credentials, _ = google.auth.default()
-    drive_service = build_drive_service("drive", "v3", credentials=credentials)
-    return {
-        DeliveryChannel.EMAIL: EmailDelivery(secret_manager),
-        DeliveryChannel.GDRIVE: GDriveDelivery(drive_service, settings.gdrive_root_folder_id),
-    }
 
 
 def _echo_delivery_results(results: list[DeliveryResult]) -> None:
@@ -180,7 +168,7 @@ def run(
         report_config = registry.get(report)
         override = [r.strip() for r in recipients.split(",") if r.strip()] if recipients else None
         final_recipients = resolve_recipients(report_config, override)
-        delivery_factories = _build_delivery_factories(settings)
+        delivery_factories = build_delivery_factories(settings)
         delivery_results = dispatch_delivery(
             report_config, result.rendered_files, final_recipients, client, delivery_factories
         )
@@ -458,7 +446,7 @@ def run_batch_cmd(
     except Exception as exc:  # noqa: BLE001 - se reporta por entrada, no debe tumbar el batch
         gcs_client = None
         gcs_construction_error = str(exc)
-    delivery_factories = _build_delivery_factories(settings) if deliver else None
+    delivery_factories = build_delivery_factories(settings) if deliver else None
 
     for entry, result in zip(entries, results):
         if result.status == "success":

@@ -8,7 +8,7 @@ reportes (YAML + SQL), siguiendo el diagrama de arquitectura interno
 
 **Estado actual: Fase 1 completa y en uso real; Fases 2 y 3 con código listo,
 sin desplegar recursos reales de GCP todavía.** Fase 1 implementa el "Def
-Main" del diagrama de forma local y testeable: registro de reportes (20
+Main" del diagrama de forma local y testeable: registro de reportes (25
 reportes reales registrados, 183 clientes importados), ejecución contra
 BigQuery, renderizado a CSV/XLSX/TXT/PDF, `run-batch` para la corrida mensual
 completa, y una CLI. Además de los reportes registrados, el comando `ask`
@@ -18,14 +18,14 @@ solo-lectura, y exporta a CSV/XLSX/PDF o Drive. Fase 2 (delivery por correo
 + GDrive) y Fase 3 (disparo
 por Cloud Scheduler → Pub/Sub → Cloud Run Service) tienen el código escrito
 y probado con mocks (y contra BigQuery real donde aplica), pero **no existen
-todavía el secret de SMTP, la carpeta de Drive, el bucket, ni el tema de
-Pub/Sub** — son pasos explícitos pendientes, ver
-[Roadmap](#roadmap-fases-2-4). FTP no está implementado (sin un cliente real
-para probarlo). La **UI** (Streamlit) también tiene código listo y probado
-(ver sección UI), pero su despliegue real a Cloud Run + IAP está bloqueado
-por permisos de GCP que la cuenta usada en esta sesión no tiene — queda
-documentado para que un admin del proyecto lo despliegue. API (capa del
-diagrama) sigue fuera de alcance.
+todavía el secret de SMTP, la carpeta de Drive, ni el tema de
+Pub/Sub** (el bucket de trace sí — ya está creado, ver
+[Roadmap](#roadmap-fases-2-4)) — son pasos explícitos pendientes. FTP no
+está implementado (sin un cliente real para probarlo). La **UI** (Streamlit)
+también tiene código listo y probado (ver sección UI), pero su despliegue
+real a Cloud Run + IAP está bloqueado por permisos de GCP que la cuenta
+usada en esta sesión no tiene — queda documentado para que un admin del
+proyecto lo despliegue. API (capa del diagrama) sigue fuera de alcance.
 
 ## Requisitos
 
@@ -531,22 +531,44 @@ punta desde la CLI y la UI.
 **Pendiente — comandos de despliegue, NO ejecutados** (correr uno por uno,
 revisando cada paso, cuando se decida desplegar de verdad):
 
+**Sobre la service account:** `iam.serviceAccounts.create` no esta otorgado
+hoy (verificado con `testIamPermissions`), asi que crear una SA dedicada
+para esto no es una opcion todavia. Los comandos de abajo usan la
+**default compute service account**
+(`901461160778-compute@developer.gserviceaccount.com`) para todo: correr
+el Cloud Run Service Y invocarlo desde Eventarc. Esto evita el gap real que
+tenia esta seccion antes: `gcloud run deploy` sin `--service-account`
+corre como esa SA por default, pero el trigger de Eventarc necesitaba una
+SA explicita con `run.invoker` sobre el servicio -- sin ese paso (que
+faltaba aca) Eventarc recibe un 403 al intentar invocar el servicio
+`--no-allow-unauthenticated`.
+
 ```bash
 # Una sola vez: habilitar APIs y crear el tema (el bucket ya existe, ver arriba)
+# NOTA: esto tambien necesita permisos de Cloud Build que hoy no estan
+# otorgados (ni siquiera cloudbuild.builds.create) -- confirmar antes.
 gcloud services enable run.googleapis.com eventarc.googleapis.com pubsub.googleapis.com --project=data-prd-424213
 gcloud pubsub topics create reporting-automation-triggers --project=data-prd-424213
 
-# Build + deploy del Cloud Run Service
+# Build + deploy del Cloud Run Service -- SA explicita (ver nota arriba)
 gcloud run deploy reporting-automation --source . --region=europe-southwest1 \
-    --no-allow-unauthenticated --project=data-prd-424213
+    --no-allow-unauthenticated --project=data-prd-424213 \
+    --service-account=901461160778-compute@developer.gserviceaccount.com
 
-# Trigger de Eventarc: Pub/Sub -> Cloud Run Service
+# Dar a esa misma SA permiso para invocar el servicio -- sin esto, el
+# trigger de mas abajo recibe 403 al intentar disparar el Cloud Run Service.
+gcloud run services add-iam-policy-binding reporting-automation \
+    --region=europe-southwest1 --project=data-prd-424213 \
+    --member="serviceAccount:901461160778-compute@developer.gserviceaccount.com" \
+    --role="roles/run.invoker"
+
+# Trigger de Eventarc: Pub/Sub -> Cloud Run Service (misma SA de arriba)
 gcloud eventarc triggers create reporting-automation-trigger \
     --location=europe-southwest1 --destination-run-service=reporting-automation \
     --destination-run-region=europe-southwest1 \
     --event-filters="type=google.cloud.pubsub.topic.v1.messagePublished" \
     --transport-topic=projects/data-prd-424213/topics/reporting-automation-triggers \
-    --service-account=<SA>@data-prd-424213.iam.gserviceaccount.com
+    --service-account=901461160778-compute@developer.gserviceaccount.com
 
 # Los 23 Cloud Scheduler jobs:
 python -m reporting_automation generate-scheduler-jobs   # imprime los comandos, no los corre
@@ -557,28 +579,35 @@ python -m reporting_automation generate-scheduler-jobs   # imprime los comandos,
 Lo que ya existe:
 
 - `cloudbuild.yaml`: `lint` (ruff) → `test` (pytest) → `build` (imagen
-  Docker) → `push` (Artifact Registry) → `deploy` (Cloud Run Service). Se
-  puede correr a mano desde ya: `gcloud builds submit --config=cloudbuild.yaml`.
-- El proyecto ya es un repo git local (`git init` + primer commit hecho).
+  Docker) → `push` (Artifact Registry) → `deploy` (Cloud Run Service).
+  **No se puede correr todavia** con los permisos actuales: ni
+  `cloudbuild.builds.create` esta otorgado (verificado con
+  `testIamPermissions`), asi que `gcloud builds submit` fallaria con un
+  permiso denegado antes de llegar a ejecutar un solo paso.
+- El proyecto ya tiene remoto conectado en GitHub
+  (`github.com/danielaguinaga-create/reporting-automation`, rama `main`
+  trackeando `origin/main`) y viene pusheando ahi durante todo el
+  desarrollo.
 - `ruff` configurado como linter (`pyproject.toml`, reglas `E`/`F`/`I`,
   `line-length=110`) — `ruff check src tests` corre limpio.
 
-Lo que falta (requiere una decisión de dónde vive el repo, no inventada
-aquí): conectar un **remoto** (GitHub, GitLab, o Cloud Source Repos) —
-`git remote add origin <url> && git push -u origin main` — y crear el
-trigger de Cloud Build apuntando a ese remoto
-(`gcloud builds triggers create github/gitlab/...`). Sin remoto, un trigger
-no tiene de dónde disparar; mientras tanto, `cloudbuild.yaml` sirve para
-correr el pipeline a mano.
+Lo que falta: (1) un rol de Cloud Build (ej. `roles/cloudbuild.builds.editor`)
+para poder correr `cloudbuild.yaml` siquiera a mano, y (2) crear el trigger
+apuntando al remoto que ya existe (`gcloud builds triggers create github ...`,
+tambien bloqueado por el mismo permiso faltante). El repo con remoto ya no
+es el bloqueo -- el permiso de Cloud Build si lo es.
 
 ### TODOs abiertos (decisiones pendientes de la empresa, no inventadas aquí)
 
 1. ~~Nombre final del bucket GCS de trace~~ — resuelto:
    `reporting-automation-trace`, ya creado en `europe-southwest1`.
 2. Nombre final del tema de Pub/Sub (y si hay uno por ambiente dev/prod).
-3. Detalles del trigger de Cloud Build (host del repo, estrategia de ramas,
-   nombre del Artifact Registry) — este proyecto ni siquiera es un repo git
-   todavía.
+3. Nombre del repositorio de Artifact Registry (`cloudbuild.yaml` asume
+   uno llamado `reporting-automation`, que todavia no existe -- solo existe
+   `data-jobs`, de otra pipeline) y estrategia de ramas para el trigger.
+   El repo/remoto ya existen (GitHub); lo que falta es el permiso de Cloud
+   Build para poder crear el trigger o siquiera probar `cloudbuild.yaml`
+   a mano.
 4. Dirección exacta de alertas de fallo ("data/logging") — todavía no hay
    mecanismo de alertas, solo logging.
 5. Estrategia de auth para GDrive: Shared Drive con la service account como
@@ -623,8 +652,9 @@ personas no pueda mandarle algo real a un cliente por accidente.
 - `Dockerfile.ui`: imagen para un Cloud Run Service separado del de Fase 3
   (`reporting-automation-ui` vs `reporting-automation`).
 - Probado: `tests/unit/test_ui_app.py` (con `streamlit.testing.v1.AppTest`,
-  BigQuery mockeado) y en vivo contra BigQuery real (20 reportes listados,
-  corrida real de `chats_detalle`, 24 filas, botón de descarga generado).
+  BigQuery mockeado) y en vivo contra BigQuery real (listado de reportes
+  poblado desde `ReportRegistry`, corrida real de `chats_detalle`, 24
+  filas, botón de descarga generado).
 
 ### Catálogo de compañías: BigQuery, no `config/clients/*.yaml`
 
@@ -651,7 +681,12 @@ sin pasar por la CLI: id/nombre/descripción, alcance (`shared` o
 (una por línea, `nombre:TIPO_BQ` -- mismo formato que `--param` en
 `new-report`), un checkbox para agregar la ventana de tiempo
 (`start_date`/`end_date`, ver sección "Ventanas de tiempo" más arriba), la
-SQL pegada a mano, formatos de salida y una plantilla de layout opcional.
+SQL pegada a mano, formatos de salida, y canales de entrega + destinatarios
+por defecto (opcional -- solo declara `delivery_channels`/
+`default_recipients` en la config, no dispara ningún envío desde la UI, ver
+más abajo). El wizard no tiene selector de plantilla de layout (`template`)
+-- un reporte creado desde la UI siempre usa la plantilla default; para una
+plantilla especifica hay que usar `new-report --template` en la CLI.
 
 **La SQL se guarda tal cual se pega, sin ningún chequeo de seguridad** —
 mismo nivel de confianza que ya tiene `new-report` en la CLI hoy (que
@@ -670,20 +705,41 @@ Abre `http://localhost:8501`. Usa tus credenciales ADC ya configuradas
 
 ### Por qué el despliegue real no se hizo en esta sesión
 
-Intenté los primeros pasos reales (listar Artifact Registry, leer el IAM del
-proyecto, listar servicios de Cloud Run) y los tres fallaron por permisos:
-la cuenta usada (`daniel.aguinaga@meetingdoctors.com`) tiene acceso a
-BigQuery pero **ningún permiso de Cloud Run / Artifact Registry / IAM** en
-`data-prd-424213`. No es algo que se pueda resolver desde el código — hace
-falta que alguien con rol de administrador en el proyecto otorgue esos
-permisos, o corra el despliegue directamente. Número de proyecto (obtenido
-sin permisos especiales): `901461160778`.
+Los primeros intentos (listar Artifact Registry, leer el IAM del proyecto,
+listar servicios de Cloud Run) fallaron por permisos: en ese momento la
+cuenta usada (`daniel.aguinaga@meetingdoctors.com`) tenía acceso a BigQuery
+pero ningún permiso de Cloud Run / Artifact Registry / IAM en
+`data-prd-424213`. **Desde entonces se otorgaron `run.admin`,
+`artifactregistry.admin`, `iam.serviceAccountUser`, `iap.admin`,
+`iap.settingsAdmin` y `oauthconfig.editor`** -- confirmado permiso por
+permiso con `testIamPermissions` (no solo por nombre de rol): `run.admin` y
+`artifactregistry.admin` habilitan de verdad `run.services.create/update` y
+`artifactregistry.repositories.uploadArtifacts/create`, y de paso quedaron
+otorgados (sin pedirlos explícitamente) `pubsub.topics.create` y
+`serviceusage.services.enable`.
 
-### Guía de despliegue para quien tenga permisos de admin
+Lo que **sigue** bloqueando un despliegue real hoy:
 
-Roles necesarios en `data-prd-424213`: `roles/run.admin`,
-`roles/artifactregistry.admin`, `roles/iam.serviceAccountUser`, y para IAP
-`roles/iap.admin` + `roles/iap.settingsAdmin` + `roles/oauthconfig.editor`.
+- **Cloud Build**: ningún permiso otorgado, ni `cloudbuild.builds.create`
+  -- el paso 1 de la guía de abajo (`gcloud builds submit`) fallaría con
+  permiso denegado antes de ejecutar un solo paso. Sin esto no se puede
+  usar `cloudbuild.yaml`/`cloudbuild.ui.yaml` ni a mano ni con trigger.
+- **Solo para Fase 3** (no para la UI): faltan `eventarc.triggers.create`
+  y `cloudscheduler.jobs.create` -- sin el primero no se puede conectar
+  Pub/Sub con Cloud Run, sin el segundo no se pueden crear los jobs
+  programados. `iam.serviceAccounts.create` tampoco está otorgado, por eso
+  la sección de Fase 3 más arriba usa la default compute service account
+  en vez de una dedicada.
+
+Número de proyecto: `901461160778`.
+
+### Guía de despliegue de la UI (roles ya otorgados a esta cuenta)
+
+Roles necesarios en `data-prd-424213`, **ya otorgados** a la cuenta que usa
+esta sesión: `roles/run.admin`, `roles/artifactregistry.admin`,
+`roles/iam.serviceAccountUser`, y para IAP `roles/iap.admin` +
+`roles/iap.settingsAdmin` + `roles/oauthconfig.editor`. Sigue faltando
+Cloud Build (ver arriba) para poder correr el paso 1 de abajo.
 
 ```bash
 # 0. Si es la primera vez que se usa Artifact Registry en el proyecto:

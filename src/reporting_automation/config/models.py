@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from enum import Enum
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class OutputFormat(str, Enum):
@@ -61,6 +61,16 @@ class ReportConfig(BaseModel):
     """Nombre de una plantilla en config/templates/<template>.html.j2. Si es
     None, PDF/HTML usan la plantilla default empaquetada (ver
     rendering/pdf_renderer.py y rendering/html_renderer.py)."""
+
+    @field_validator("delivery_channels")
+    @classmethod
+    def _no_duplicate_delivery_channels(cls, value: list[DeliveryChannel]) -> list[DeliveryChannel]:
+        # dispatch_delivery() itera esta lista sin deduplicar -- un canal
+        # repetido (typo de copy-paste en un YAML a mano) manda el mismo
+        # reporte dos veces por ese canal.
+        if len(value) != len(set(value)):
+            raise ValueError(f"delivery_channels tiene canales repetidos: {value}")
+        return value
 
 
 class ClientConfig(BaseModel):

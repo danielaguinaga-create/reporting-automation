@@ -31,9 +31,10 @@ class FakeSecretManager:
 class FakeSMTP:
     instances: list["FakeSMTP"] = []
 
-    def __init__(self, host, port):
+    def __init__(self, host, port, timeout=None):
         self.host = host
         self.port = port
+        self.timeout = timeout
         self.started_tls = False
         self.logged_in = None
         self.sent_message = None
@@ -91,11 +92,29 @@ def test_send_success_builds_and_sends_message(tmp_path, monkeypatch):
     smtp = FakeSMTP.instances[0]
     assert smtp.host == "smtp.gmail.com"
     assert smtp.port == 587
+    assert smtp.timeout == email_delivery_module._SMTP_TIMEOUT_SECONDS
     assert smtp.started_tls is True
     assert smtp.logged_in == ("reportes@meetingdoctors.com", "app-password")
     assert smtp.sent_message["To"] == "destino@cliente.com"
     assert smtp.sent_message["From"] == "reportes@meetingdoctors.com"
     assert smtp.sent_message.get_payload()[1].get_filename() == "r.csv"
+
+
+def test_send_uses_ssl_not_starttls_for_port_465(monkeypatch):
+    """Puerto 465 (TLS implicito, ej. relays de Gmail) necesita SMTP_SSL, no
+    SMTP+starttls -- conectar en plaintext a un puerto que solo habla TLS
+    desde el arranque cuelga la conexion (ver hallazgo del code review)."""
+    FakeSMTP.instances = []
+    monkeypatch.setattr(email_delivery_module.smtplib, "SMTP_SSL", FakeSMTP)
+
+    secret = {**VALID_SECRET, "port": 465}
+    delivery = EmailDelivery(FakeSecretManager(secret))
+    result = delivery.send([], _report(), "acme", ["a@b.com"])
+
+    assert result.status == "sent"
+    smtp = FakeSMTP.instances[0]
+    assert smtp.port == 465
+    assert smtp.started_tls is False  # SMTP_SSL ya es TLS -- starttls() no se llama
 
 
 def test_send_missing_secret_returns_failed_not_exception():
@@ -107,9 +126,22 @@ def test_send_missing_secret_returns_failed_not_exception():
     assert "secret no encontrado" in result.detail
 
 
+def test_send_malformed_secret_missing_from_address_returns_failed_not_exception():
+    """Un secret sin 'from_address' rompia la construccion del mensaje --
+    ese codigo vivia afuera de cualquier try/except y tumbaba send() con un
+    KeyError sin controlar (ver hallazgo del code review)."""
+    incomplete_secret = {k: v for k, v in VALID_SECRET.items() if k != "from_address"}
+    delivery = EmailDelivery(FakeSecretManager(incomplete_secret))
+
+    result = delivery.send([], _report(), "acme", ["a@b.com"])
+
+    assert result.status == "failed"
+    assert "from_address" in result.detail
+
+
 def test_send_smtp_connection_error_returns_failed(monkeypatch):
     class BoomSMTP:
-        def __init__(self, host, port):
+        def __init__(self, host, port, timeout=None):
             raise ConnectionRefusedError("conexion rechazada")
 
     monkeypatch.setattr(email_delivery_module.smtplib, "SMTP", BoomSMTP)

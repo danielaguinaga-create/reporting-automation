@@ -25,7 +25,9 @@ def dispatch_delivery(
     se llama despues de un `run_report` exitoso (ver `cli.py`/`main_entrypoint.py`).
 
     Un canal sin implementacion (ej. `ftp`) devuelve un `DeliveryResult`
-    fallido con mensaje claro, no interrumpe los demas canales.
+    fallido con mensaje claro, no interrumpe los demas canales -- y lo mismo
+    si un canal implementado levanta una excepcion inesperada: se reporta
+    como fallido para ESE canal, pero no aborta los que quedan por probar.
     """
     results = []
     for channel in report.delivery_channels:
@@ -35,6 +37,9 @@ def dispatch_delivery(
             results.append(DeliveryResult(channel=channel, status="failed", detail=str(exc)))
             continue
 
-        results.append(delivery.send(rendered_files, report, client_id, recipients))
+        try:
+            results.append(delivery.send(rendered_files, report, client_id, recipients))
+        except Exception as exc:  # noqa: BLE001 - un canal roto no debe tumbar a los demas
+            results.append(DeliveryResult(channel=channel, status="failed", detail=str(exc)))
 
     return results

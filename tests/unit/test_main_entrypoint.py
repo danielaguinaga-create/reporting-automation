@@ -1,11 +1,14 @@
 import base64
 import json
+from pathlib import Path
 
 import pandas as pd
 import pytest
 
 from reporting_automation import main_entrypoint
 from reporting_automation.config.loader import Settings
+from reporting_automation.config.models import DeliveryChannel
+from reporting_automation.config.registry import ReportRegistry
 
 
 class FakeQueryJob:
@@ -25,30 +28,44 @@ class FakeBigQueryClient:
 
 
 class FakeBlob:
-    def __init__(self, name, sink):
+    def __init__(self, name, sink, markers):
         self.name = name
         self._sink = sink
+        self._markers = markers
 
     def upload_from_filename(self, path: str) -> None:
         self._sink.append((self.name, path))
+        # Confirma que el archivo local todavia existe en este punto -- el
+        # bug que este fixture ayuda a detectar borraba tmp_dir antes de
+        # que la entrega (que corre despues de la subida a GCS) pudiera
+        # leerlo.
+        assert Path(path).exists(), f"{path} no existe en el momento de subir a GCS"
+
+    def exists(self) -> bool:
+        return self.name in self._markers
+
+    def upload_from_string(self, data: str) -> None:
+        self._markers.add(self.name)
 
 
 class FakeBucket:
-    def __init__(self, sink):
+    def __init__(self, sink, markers):
         self._sink = sink
+        self._markers = markers
 
     def blob(self, name: str) -> FakeBlob:
-        return FakeBlob(name, self._sink)
+        return FakeBlob(name, self._sink, self._markers)
 
 
 class FakeStorageClient:
     uploads: list = []
+    markers: set = set()
 
     def __init__(self, project: str | None = None):
         pass
 
     def bucket(self, bucket_name: str) -> FakeBucket:
-        return FakeBucket(FakeStorageClient.uploads)
+        return FakeBucket(FakeStorageClient.uploads, FakeStorageClient.markers)
 
 
 def _pubsub_envelope(payload: dict) -> dict:
@@ -58,7 +75,14 @@ def _pubsub_envelope(payload: dict) -> dict:
 
 @pytest.fixture(autouse=True)
 def _patch_gcp_clients(monkeypatch, reports_fixtures_dir, clients_fixtures_dir):
+    # _state se cachea perezosamente en el primer request (ver
+    # main_entrypoint._get_state) -- sin resetearlo, el primer test que
+    # corra en el proceso construiria el estado real UNA vez, y todos los
+    # tests siguientes reutilizarian ese mismo estado cacheado en vez del
+    # que cada test necesita mockear.
+    monkeypatch.setattr(main_entrypoint, "_state", None)
     FakeStorageClient.uploads = []
+    FakeStorageClient.markers = set()
     monkeypatch.setattr(main_entrypoint.bigquery, "Client", FakeBigQueryClient)
     monkeypatch.setattr(main_entrypoint.storage, "Client", FakeStorageClient)
     monkeypatch.setattr(
@@ -71,6 +95,15 @@ def _patch_gcp_clients(monkeypatch, reports_fixtures_dir, clients_fixtures_dir):
             clients_dir=str(clients_fixtures_dir),
             trace_bucket="test-bucket",
         ),
+    )
+    monkeypatch.setattr("google.auth.default", lambda *a, **k: (None, "test-project"))
+    monkeypatch.setattr(
+        "reporting_automation.delivery.factory.build_drive_service",
+        lambda *a, **k: None,
+    )
+    monkeypatch.setattr(
+        "reporting_automation.delivery.factory.secretmanager.SecretManagerServiceClient",
+        lambda *a, **k: None,
     )
 
 
@@ -123,10 +156,14 @@ def test_handle_push_no_json_body_returns_400(client):
     assert response.status_code == 400
 
 
-def test_handle_push_unknown_report_returns_500(client):
+def test_handle_push_unknown_report_returns_400_not_500(client):
+    """Un report_id que no existe nunca va a empezar a existir solo con
+    reintentos -- devolver 500 (como antes) hace que Pub/Sub reintente para
+    siempre un mensaje que jamas va a tener éxito. 400 es correcto: error
+    permanente del cliente, no transitorio."""
     envelope = _pubsub_envelope({"reporte": "does_not_exist", "cliente": "acme", "params": {}})
     response = client.post("/", json=envelope)
-    assert response.status_code == 500
+    assert response.status_code == 400
     assert FakeStorageClient.uploads == []
 
 
@@ -144,3 +181,79 @@ def test_handle_push_gcs_upload_failure_returns_500_not_a_crash(client, monkeypa
 
     assert response.status_code == 500
     assert "GCS" in response.get_data(as_text=True)
+
+
+def _with_delivery_channels(monkeypatch, report_id: str, channels: list[DeliveryChannel]) -> None:
+    original_get = ReportRegistry.get
+
+    def patched_get(self, rid):
+        report = original_get(self, rid)
+        if rid == report_id:
+            return report.model_copy(update={"delivery_channels": channels})
+        return report
+
+    monkeypatch.setattr(ReportRegistry, "get", patched_get)
+
+
+def test_handle_push_dispatches_delivery_before_tmpdir_cleanup(client, monkeypatch):
+    """Antes de este fix, dispatch_delivery corria despues de que el `with
+    tempfile.TemporaryDirectory()` ya habia borrado los archivos generados
+    -- la entrega fallaba siempre en silencio (200 igual, error solo en
+    logs). Este test confirma que dispatch_delivery recibe rutas que
+    TODAVIA existen en disco en el momento en que se llama."""
+    _with_delivery_channels(monkeypatch, "simple_report", [DeliveryChannel.EMAIL])
+
+    captured_paths = []
+
+    def fake_dispatch_delivery(report, rendered_files, recipients, client_id, delivery_factories):
+        captured_paths.extend(rf.local_path for rf in rendered_files)
+        assert all(p.exists() for p in captured_paths), "dispatch_delivery corrio con archivos ya borrados"
+        return []
+
+    monkeypatch.setattr(main_entrypoint, "dispatch_delivery", fake_dispatch_delivery)
+
+    envelope = _pubsub_envelope({"reporte": "simple_report", "cliente": "acme", "params": {}})
+    response = client.post("/", json=envelope)
+
+    assert response.status_code == 200
+    assert len(captured_paths) == 1
+
+
+def test_handle_push_malformed_window_type_returns_400_not_500(client):
+    """window numerico en vez de string (payload malformado) debe rechazarse
+    con 400 -- antes tumbaba BatchEntry(...) con un ValidationError sin
+    capturar, produciendo un 500 que Pub/Sub reintenta para siempre sobre
+    un payload que nunca va a dejar de ser invalido."""
+    envelope = _pubsub_envelope(
+        {"reporte": "simple_report", "cliente": "acme", "params": {}, "window": 30}
+    )
+    response = client.post("/", json=envelope)
+    assert response.status_code == 400
+
+
+def test_handle_push_null_message_returns_400_not_crash(client):
+    """{"message": null} es JSON valido pero rompia el chequeo de forma del
+    envelope con un TypeError sin capturar (`"data" not in None`) en vez del
+    InvalidPubSubEnvelope esperado."""
+    response = client.post("/", json={"message": None})
+    assert response.status_code == 400
+
+
+def test_handle_push_redelivery_does_not_dispatch_delivery_twice(client, monkeypatch):
+    """Pub/Sub es at-least-once: el mismo mensaje puede reentregarse aunque
+    ya se haya procesado con exito. Sin el marcador de entrega, un reintento
+    manda el mismo correo dos veces."""
+    _with_delivery_channels(monkeypatch, "simple_report", [DeliveryChannel.EMAIL])
+
+    calls = []
+    monkeypatch.setattr(
+        main_entrypoint, "dispatch_delivery", lambda *a, **k: calls.append(1) or []
+    )
+
+    envelope = _pubsub_envelope({"reporte": "simple_report", "cliente": "acme", "params": {}})
+    first = client.post("/", json=envelope)
+    second = client.post("/", json=envelope)
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert len(calls) == 1
