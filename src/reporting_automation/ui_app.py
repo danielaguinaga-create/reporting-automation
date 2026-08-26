@@ -404,7 +404,7 @@ with tab_schedule:
         "Define que reporte corre para que cliente y con que frecuencia. Esto guarda la "
         "programacion en config/monthly_batch.yaml, pero **no ejecuta nada automaticamente "
         "todavia**: Cloud Scheduler -> Pub/Sub -> Cloud Run (Fase 3) esta escrito pero no "
-        "desplegado (falta acceso IAM, ver README). El comando `gcloud` que aparece abajo es "
+        "desplegado (ver README). El comando `gcloud` que aparece abajo es "
         "el que activaria esta programacion de verdad cuando eso se despliegue."
     )
 

@@ -120,12 +120,12 @@ is frozen (see Rendering above).
 **Fase 3 (not deployed)**: `main_entrypoint.py` is a Flask app meant to sit
 behind Eventarc/Pub/Sub on Cloud Run, calling the same `run_report()`.
 Deployment commands are documented in the README but have not been run —
-blocked on GCP IAM permissions the current account doesn't have. Some
-roles got granted since this was first written (`run.admin`,
-`artifactregistry.admin`, etc. — enough for Cloud Run/Artifact Registry),
-but Cloud Build, Eventarc, and Cloud Scheduler permissions are still
-missing (see README, "Por qué el despliegue real no se hizo en esta
-sesión" for the exact breakdown) — still not a code gap.
+originally blocked on GCP IAM permissions the account didn't have. All the
+permissions needed (Cloud Run, Artifact Registry, IAM, Eventarc, Cloud
+Scheduler, Cloud Build) have since been granted and verified one by one
+with `testIamPermissions` (see README, "Por qué el despliegue real no se
+hizo en esta sesión") — deployment is now a decision to make, not a
+permissions gap, and still hasn't been run for real in any session.
 
 ## Testing conventions
 
