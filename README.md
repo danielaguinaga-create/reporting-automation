@@ -22,10 +22,12 @@ todavía el secret de SMTP, la carpeta de Drive, ni el tema de
 Pub/Sub** (el bucket de trace sí — ya está creado, ver
 [Roadmap](#roadmap-fases-2-4)) — son pasos explícitos pendientes. FTP no
 está implementado (sin un cliente real para probarlo). La **UI** (Streamlit)
-también tiene código listo y probado (ver sección UI), pero su despliegue
-real a Cloud Run + IAP está bloqueado por permisos de GCP que la cuenta
-usada en esta sesión no tiene — queda documentado para que un admin del
-proyecto lo despliegue. API (capa del diagrama) sigue fuera de alcance.
+también tiene código listo y probado (ver sección UI); su despliegue real a
+Cloud Run + IAP tiene ya otorgados los roles de Cloud Run/Artifact
+Registry/IAM/IAP que necesita, pero sigue bloqueado por el permiso de Cloud
+Build (falta incluso `cloudbuild.builds.create`, ver sección UI para el
+detalle) — no hace falta un admin distinto, solo ese permiso puntual. API
+(capa del diagrama) sigue fuera de alcance.
 
 ## Requisitos
 
