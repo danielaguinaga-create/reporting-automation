@@ -1,5 +1,6 @@
 import base64
 import json
+from datetime import date
 from pathlib import Path
 
 import pandas as pd
@@ -20,10 +21,13 @@ class FakeQueryJob:
 
 
 class FakeBigQueryClient:
+    last_query_parameters: list = []
+
     def __init__(self, project: str | None = None):
         self._df = pd.DataFrame({"dummy_col": [1, 2, 3]})
 
     def query(self, sql, job_config=None):
+        FakeBigQueryClient.last_query_parameters = list(job_config.query_parameters) if job_config else []
         return FakeQueryJob(self._df)
 
 
@@ -83,6 +87,7 @@ def _patch_gcp_clients(monkeypatch, reports_fixtures_dir, clients_fixtures_dir):
     monkeypatch.setattr(main_entrypoint, "_state", None)
     FakeStorageClient.uploads = []
     FakeStorageClient.markers = set()
+    FakeBigQueryClient.last_query_parameters = []
     monkeypatch.setattr(main_entrypoint.bigquery, "Client", FakeBigQueryClient)
     monkeypatch.setattr(main_entrypoint.storage, "Client", FakeStorageClient)
     monkeypatch.setattr(
@@ -138,6 +143,28 @@ def test_handle_push_resolves_window_preset(client):
 
     assert response.status_code == 200
     assert len(FakeStorageClient.uploads) == 1
+
+
+def test_handle_push_resolves_window_preset_to_correct_dates(client):
+    """No alcanza con que la corrida no falle -- confirma que start_date/
+    end_date que le llegan de verdad a BigQuery (via job_config.query_
+    parameters) son los que corresponden al preset, no cualquier valor
+    que evite el error de 'falta el parametro'."""
+    from reporting_automation.time_window import resolve_window
+
+    envelope = _pubsub_envelope(
+        {"reporte": "windowed_report", "cliente": "acme", "params": {}, "window": "last_7_days"}
+    )
+
+    response = client.post("/", json=envelope)
+
+    assert response.status_code == 200
+    # bigquery.ScalarQueryParameter coacciona el string ISO a datetime.date
+    # para un parametro tipo DATE -- comparamos como string para no acoplar
+    # el test a ese detalle de la libreria.
+    bound = {p.name: str(p.value) for p in FakeBigQueryClient.last_query_parameters}
+    expected_start, expected_end = resolve_window("last_7_days", date.today())
+    assert bound == {"start_date": expected_start, "end_date": expected_end}
 
 
 def test_handle_push_missing_report_or_client_returns_400(client):
